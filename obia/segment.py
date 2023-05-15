@@ -98,8 +98,51 @@ def normalizedDifference(image_array, band_indices):
     # computation
     ndiff = (image_array[band_indices[0]].astype(float) - image_array[band_indices[1]].astype(float)) / (image_array[band_indices[0]] + image_array[band_indices[1]])
     return ndiff
-    
 
+
+def VARI(image_array, band_indices_rgb):
+    """
+    Compute Visible atmospherically resistant index
+    
+    VARI = (Green-Red) / (Green+Red-Blue)
+    
+    Reference: Gitelson, A., et al. "Vegetation and Soil Lines in Visible Spectral Space: A Concept and Technique for Remote Estimation of Vegetation Fraction. International Journal of Remote Sensing 23 (2002): 2537−2562.
+
+    Parameters
+    ----------
+    image_array : TYPE
+        DESCRIPTION.
+    band_indices : tuple
+        Band indices for red, green and blue band
+
+    Returns
+    -------
+    VARI
+
+    """
+    vari = (image_array[band_indices_rgb[1]]-image_array[band_indices_rgb[0]]) / (image_array[band_indices_rgb[1]]+image_array[band_indices_rgb[0]]-image_array[band_indices_rgb[2]])
+    return vari
+    
+def GCC(image_array, band_indices):
+    """
+    Compute Green Colour Coordinate (GCC)
+    GCC = green / (Red+Green+Blue)
+    
+    Parameters
+    ----------
+    image_array : TYPE
+        DESCRIPTION.
+    band_indices : list or tuple
+        indices in order blue, green, red
+
+    Returns
+    -------
+    GCC
+
+    """
+    gcc = image_array[band_indices[1]] / (image_array[band_indices[2]]+image_array[band_indices[1]]+image_array[band_indices[0]])
+    return gcc    
+    
 # path to image
 fp_test = 'D:\\Users\\E1008409\\MK\S2\\ac\\S2B_MSIL1C_20190903T100029_N0208_R122_T34WFT_20190903T121103\\S2B_MSI_2019_09_03_10_02_29_T34WFT_L2W_RrsB2B3B4B8_median3x3_filt.tif'
 fp_seg = 'D:\\Users\\E1008409\\MK\\worldview\\pori\\ac\\segment\\segments_test_wv0.005sigma_felzenszwalb.tif'
@@ -157,7 +200,7 @@ img = np.where(img < 0, np.nan, img)
 #img = np.transpose(img, (2,0,1))
 
 # set some parameters
-n = 30
+n = 20
 sig = 0.0005
 s = 0.25
 
@@ -246,7 +289,7 @@ s2b_central_wl = [442.2, 492.1, 559.0, 664.9, 703.8, 739.1, 779.7, 832.9, 864.0,
 tgi = TGI(img, (0,1,2), s2b_central_wl[1:4])
 
 
-
+vari = VARI(img, (2,1,0))
 
 # stack to image
 img = img.transpose(1,2,0)
@@ -288,7 +331,7 @@ def segment_features(segment_pixels):
 #segments_ = np.reshape(segments_, (segments_.shape[0], segments_.shape[1]))
 
 # read segments
-with rio.open(fp_seg) as src:
+with rio.open(segfile) as src:
     segments = src.read()
     segmeta = src.meta
 ###############
@@ -330,7 +373,7 @@ def segStatsSimple(segment_id, segments, img_array):
     object_features = segment_features(segpx)
     return object_features, segment_id
     
-def segStats(segment_id, segments=segments, img_array=img, ndvi_array=ndvi, depth_array=depth):
+def segStats(segment_id, segments=segments, img_array=img, depth_array=depth):
 
     import numpy as np
     from scipy import stats as st
@@ -350,20 +393,30 @@ def segStats(segment_id, segments=segments, img_array=img, ndvi_array=ndvi, dept
         
         return features
 
-    segment_pixels = np.where(segments == segment_id, img_array, np.nan) # img[segments == ob_id]
-    segpx = segment_pixels.reshape(segment_pixels[0].reshape(-1).shape[0], img_array.shape[0])
-    # ndvi average
-    seg_ndvi = np.where(segments == segment_id, ndvi_array, np.nan)
+    #segment_pixels = np.where(segments == segment_id, img_array, np.nan) # img[segments == ob_id]
+    #segpx = segment_pixels.reshape(segment_pixels[0].reshape(-1).shape[0], img_array.shape[0])
+    # select pixels by id
+    seg_img = [i[segments[0]==segment_id] for i in img]
+    seg_img = np.stack(seg_img)
+    # compute other statistics
+    seg_ndvi = normalizedDifference(seg_img, (3,2))
     ndvi_mean = np.nanmean(seg_ndvi)
+    seg_grvi = normalizedDifference(seg_img, (1,2))
+    grvi_mean = np.nanmean(seg_grvi)
+    seg_gcc = GCC(seg_img, (0,1,2))
+    gcc_mean = np.nanmean(seg_gcc)
     # depth min max mean
-    seg_depth = np.where(segments == segment_id, depth_array, np.nan)
+#    seg_depth = np.where(segments == segment_id, depth_array, np.nan)
+    seg_depth = depth[segments==segment_id]
     depth_min = np.nanmin(seg_depth)
     depth_max = np.nanmax(seg_depth)
     depth_mean = np.nanmean(seg_depth)
     
-    object_features = segment_features(segpx)
-    # add ndvi to features
+    object_features = segment_features(seg_img.T)
+    # add indices to features
     object_features.append(ndvi_mean)
+    object_features.append(grvi_mean)
+    object_features.append(gcc_mean)
     # add depth stats
     object_features.append(depth_min)    
     object_features.append(depth_max)    
@@ -383,11 +436,11 @@ delayed_funcs = []
 
 # create delayed functions
 for sg_id in segment_ids:
-    delayed_funcs.append(delayed(segStatsSimple)(sg_id, segments, stack))
+    delayed_funcs.append(delayed(segStats)(sg_id, segments, img, depth))
 
 # execute delayed functions
 start = time.time()
-result = compute(delayed_funcs[:1])
+result = compute(delayed_funcs)
 end_time = time.time()
 print('Processed in %.3f minutes' % ((end_time - start)/60))
 
@@ -453,79 +506,46 @@ with rio.open(unsup_out, 'w', **unsup_meta) as dst:
 ################
 # supervised classification
 # 4. read ground truth
-fp_gt = 'D:\\Users\\E1008409\\MK\\Velmu-aineisto\\velmudata_07112022_pori.gpkg'
+fp_gt = 'D:\\Users\\E1008409\\MK\\Velmu-aineisto\\velmudata_07112022_edit_bcover_subhighvasc_algae_2019+-1_T34WFT.gpkg'
 gdf = gpd.read_file(fp_gt)
 
+# drop sparse veg cov
+gdf = gdf[(gdf.savcov > 30) | (gdf.savcov < 10)]
+
 # check crs
-src = rio.open(fp_seg)
+src = rio.open(fp_test)
 if gdf.crs.to_epsg() != src.crs.to_epsg():
     print('Reprojecting points')
     gdf = gdf.to_crs(epsg=src.crs.to_epsg())
 src.close()
 
-# drop na string rows in menetelma
-gdf = gdf[gdf['menetelma'] != 'NA']
-# to int
-gdf.menetelma = gdf.menetelma.astype(int)
+# drop None rows in bcover
+gdf = gdf[gdf['bcover'].notna()]
 
-# fix depths to floats
-if gdf.syvyys_mitattu.dtype != 'float64':
-    # convert syvyys_mitattu to numeric
-    gdf['temp'] = gdf.syvyys_mitattu.str.split('-')
-    gdf[['temp', 'temp2']] = gpd.GeoDataFrame(gdf.temp.tolist(), index=gdf.index)
-    gdf['field_depth'] = gdf['temp2'].str.replace(',','.').astype(float)
-    # drop temp columns
-    gdf = gdf.drop(['temp', 'temp2'], axis=1)
-
-else:
-    # absolute values
-    gdf['field_depth'] = abs(gdf.syvyys_mitattu)
-
-
-def rowSumFromCols(dataframe, column_list):
-    """
-    Calculate row sum from columns
-
-    Parameters
-    ----------
-    dataframe : Pandas DataFrame
-        DESCRIPTION.
-    column_list : List
-        DESCRIPTION.
-
-    Returns
-    -------
-    colsum : Pandas Series
-        DESCRIPTION.
-
-    """
-    cols = []
-    for substr in column_list:
-        temp = [c for c in dataframe.columns if substr in c]
-        cols.extend(temp)
-    # column sum row wise
-    colsum = dataframe[cols].sum(axis=1)
-    return colsum
-# list to find in colnames
-fucaceae = ['Fucus']
-# fucus coverage
-gdf['fucaceae_cov'] = rowSumFromCols(gdf, fucaceae)
-
-
-# column for new classes
-gdf['new_class'] = 0
-# define classes, 1-dense mixed 3-sparse sav 4-very sparse or no sav 5-deep water
+# unique class int for bottom cover
+gdf['bcover_int'] = None
 for idx, row in gdf.iterrows():
-    if (row.field_depth >= 4):
-        gdf['new_class'].iloc[idx] = 5
-    elif (row.savcov >= 30): # & (row.fucaceae_cov < 30):
-        gdf['new_class'].iloc[idx] = 1
-#    elif (row.savcov >= 30) & (row.fucaceae_cov >= 30):
-#        gdf['new_class'].iloc[idx] = 2
-    elif (row.savcov < 30) & (row.savcov >= 5):
-        gdf['new_class'].iloc[idx] = 3
-    elif row.savcov < 5:
-        gdf['new_class'].iloc[idx] = 4
+    if row['syvyys_mitattu'] < -2:
+        gdf['bcover_int'].loc[idx] = 6
+    elif row['bcover'].startswith('sand'):
+        gdf['bcover_int'].loc[idx] = 1
+    elif row['bcover'].startswith('soft'):
+        gdf['bcover_int'].loc[idx] = 2
+    elif row['bcover'].startswith('hard'):
+        gdf['bcover_int'].loc[idx] = 2
+    elif row['bcover'].startswith('highvasc'):
+        gdf['bcover_int'].loc[idx] = 3
+    elif row['bcover'].startswith('algae'):
+        gdf['bcover_int'].loc[idx] = 4
+    elif row['bcover'].startswith('subvasc'):
+        gdf['bcover_int'].loc[idx] = 5
+    elif row['bcover'].startswith('Mixed'):
+        gdf['bcover_int'].loc[idx] = 0
+    elif row['bcover'].startswith('other'):
+        gdf['bcover_int'].loc[idx] = 0
+
+# drop 0 
+gdf = gdf[gdf.bcover_int > 0]
 
 ###### sample segments to prevent duplicates
 
@@ -539,7 +559,7 @@ else:
     coords = [(x,y) for x,y in zip(gdf.geometry.x, gdf.geometry.y)]
 
 # open image and sample segments
-src = rio.open(fp_seg)
+src = rio.open(segfile)
 gdf['segment_ids'] = [x for x in src.sample(coords)]
 # close dataset
 src.close()
@@ -547,7 +567,7 @@ src.close()
 gdf['segment_ids'] = gpd.GeoDataFrame(gdf.segment_ids.tolist(), index=gdf.index)
 
 # drop
-gdf = gdf[gdf.segment_ids != segmeta['nodata']] # exclude 0 (nodata)
+gdf = gdf[gdf.segment_ids != 0] # exclude 0 (nodata)
 gdf = gdf.drop_duplicates(subset=('geometry'), keep='first') # drop duplicate geometries
 
 
@@ -595,10 +615,13 @@ full_data = img_segments[columns]
 """
 
 
-data = gdf[['segment_ids', 'new_class']]
+data = gdf[['segment_ids', 'bcover_int']]
 
-data = data.rename(columns={'new_class': 'classes'})
+data = data.rename(columns={'bcover_int': 'classes'})
 
+# remove any nan rows
+data = data[data.classes.notna()]
+data = data.astype(int)
 # segment ground truth
 gt_d = dict()
 
@@ -628,80 +651,139 @@ gt_d = gt_d.rename(columns={'index': 'segment_id'})
 # join geometry to unified gt
 gt_d = gt_d.merge(gdf[['segment_ids', 'geometry']], how='left', left_on='segment_id', right_on='segment_ids')
 
-# split to train test
-train = gt_d.sample(frac=0.7, random_state=42)
-# 
-train_data = train.drop('classes', axis=1)
-train_classes = train['classes']
 
-test = gt_d.drop(train.index)
+############################
+# Train test dataframe
+df_obi = pd.DataFrame(objects, columns=['bmin', 'bmax', 'bmean', 'bvar', 'bskew', 'bkurt',
+                                        'gmin', 'gmax', 'gmean', 'gvar', 'gskew', 'gkurt',
+                                        'rmin', 'rmax', 'rmean', 'rvar', 'rskew', 'rkurt',
+                                        'irmin', 'irmax', 'irmean', 'irvar', 'irskew', 'irkurt',
+                                        'ndvimean', 'grvimean', 'gccmean', 'mind', 'maxd', 'meand'])
+df_obi['seg_id'] = object_ids
 
-test_data = test.drop('classes', axis=1)
-test_classes = test['classes']
+# join bcover class by segment id
+df_obi = df_obi.join(gt_d[['segment_id', 'classes']].set_index('segment_id'), on='seg_id')
 
+df_obi = df_obi.dropna()
+# save df
+outdir = os.path.join(os.path.dirname(fp_test), 'classification')
+if os.path.isdir(outdir) == False:
+    os.mkdir(outdir)
+df_obi.to_csv(os.path.join(outdir, 'df_obi2.csv'), sep=';')
 
-# rasterize train data
-# create dictionary of geometry and point id
-gtlist = list(zip(train.geometry, train['classes'])) 
+# split
+X = df_obi.drop(['classes'], axis=1)
+y = df_obi[['classes', 'seg_id']]
+X_train, X_test, y_train, y_test = train_test_split(X, y['classes'],
+                                                    test_size=0.3,
+                                                    random_state=42, shuffle=True,
+                                                    stratify=y['classes'])
 
-# rasterize ground truth
-from rasterio.features import rasterize
-gt = rasterize(gtlist, out_shape=(img.shape[:2]), fill=0, 
-                            transform=meta['transform'], dtype='uint8')
-gt = gt.reshape(1,gt.shape[0], gt.shape[1])
-
-
-# get unique values (0 is the background, or no data, value so it is not included) for each land cover type
-classes = np.unique(gt)[1:]
-
-# for each class (land cover type) record the associated segment IDs
-segments_per_class = {}
-for klass in classes:
-    segments_of_class = segments[gt == klass]
-    segments_per_class[klass] = set(segments_of_class)
- 
-# make sure no segment ID represents more than one class
-intersection = set()
-accum = set()
-for class_segments in segments_per_class.values():
-    intersection |= accum.intersection(class_segments)
-    accum |= class_segments
-assert len(intersection) == 0, "Segment(s) represent multiple classes"
+#############################
 
 
-train_img = np.copy(segments)
-threshold = train_img.max() + 1  # make the threshold value greater than any land cover class value
+n_est = np.arange(100,500,100)
+for n in n_est:
+    # random forest classifier
+    rf = RandomForestClassifier(n_estimators=n, max_depth=None, n_jobs=5 ,max_features='sqrt', bootstrap=True, oob_score=True)
+    rf.fit(X_train, y_train)
+    
+    # CV
+    cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=1)
+    n_scores = cross_val_score(rf, X_train, y_train, cv=cv, scoring='accuracy')
+    print('n=',str(n), '%.3f (%.3f)' % (np.mean(n_scores), np.std(n_scores)))
 
-# all pixels in training segments assigned value greater than threshold
-for klass in classes:
-    class_label = threshold + klass
-    for segment_id in segments_per_class[klass]:
-        train_img[train_img == segment_id] = class_label
- 
-# training segments receive land cover class value, all other segments 0
-train_img[train_img <= threshold] = 0
-train_img[train_img > threshold] -= threshold
 
-# create objects and labels for training data
-training_objects = []
-training_labels = []
-for klass in classes:
-    class_train_object = [v for i, v in enumerate(objects) if segment_ids[i] in segments_per_class[klass]]
-    training_labels += [klass] * len(class_train_object)
-    training_objects += class_train_object
+predf = pd.DataFrame()
+predf['truth'] = y_test
+predf['predict'] = rf.predict(X_test)
+# join segment_id
+predf = predf.join(y['seg_id'])
+predf = predf.drop_duplicates()
 
-# random forest classifier
-rf = RandomForestClassifier(n_estimators=100, max_depth=None, n_jobs=5 ,max_features='sqrt', bootstrap=True, oob_score=True)
-rf.fit(training_objects, training_labels)
+# classification report
+print(metrics.classification_report(y_test, rf.predict(X_test)))
+# create confusion matrix
+cm = metrics.confusion_matrix(predf['truth'], predf['predict'])
+#val_cm = metrics.confusion_matrix(y_val, rf.predict(X_val))
+# compute row and col sums
+total = cm.sum(axis=0)
+rowtotal = cm.sum(axis=1)
 
+
+# create cm DataFrame
+cmdf = np.vstack([cm,total])
+b = np.array([[rowtotal[0]], [rowtotal[1]], [rowtotal[2]], 
+              [rowtotal[3]], [rowtotal[4]], [rowtotal[5]],
+              [rowtotal[6]], [rowtotal.sum()]])
+cmdf = np.hstack((cmdf, b))
+
+cmdf = pd.DataFrame(cmdf, index=['Sand', 'Soft', 'Hard', 'HighVasc', 'Algae', 'SAVvasc', 'Deep', 'Total'],
+                    columns = ['Sand', 'Soft', 'Hard', 'HighVasc', 'Algae', 'SAVvasc', 'Deep', 'Total'])
+
+# print
+print(pd.crosstab(predf.truth, predf.predict, margins=True))
+
+o_accuracy = np.sum(cm.diagonal()) / np.sum(cm.sum(axis=0))
+p_accuracy = cm.diagonal() / cm.sum(axis=0) # producer's accuracy
+u_accuracy = cm.diagonal() / cm.sum(axis=1) # user's accuracy
+
+# plot 
+import seaborn as sns
+sns.set_theme(style='white')
+fig, ax = plt.subplots()
+ax = sns.heatmap(cmdf, annot=True, cmap='Blues', fmt='.0f', cbar=False)
+ax.xaxis.set_ticks_position('top')
+ax.tick_params(axis='both', which='both', length=0)
+
+#fig.suptitle('Bottomtype classification accuracy')
+fig.suptitle('Pohjatyypin luokittelutarkkuus')
+plt.tight_layout()
+#plt.savefig(os.path.join(outdir, 'rf_confusion_matrix_fin.png'), dpi=300, format='PNG')
+print('Overall accuracy %.2f' % (o_accuracy))
+print('Users accuracy', u_accuracy)
+print('Producers accuracy', p_accuracy)
+
+# predict for all segments
+obj_df = pd.DataFrame(objects, columns = df_obi.columns[:-2])
+obj_df['seg_id'] = object_ids
+obj_df = obj_df.dropna()
+obj_df['predicted_class'] = rf.predict(obj_df[obj_df.columns[:-1]])
+# create prediction raster where predicted values are associated to segment_ids
+prediction = np.zeros(shape=segments.shape)
+# map predicted values to segment_ids (this is slooooow)
+for idx, row in obj_df.iterrows():
+    prediction = np.where(segments==row['seg_id'], row['predicted_class'], prediction)
+    print(str(idx), '/', str(len(obj_df)))
+    
+# outfile, metadata and save
+outdir = os.path.dirname(fp_test)
+outfile = os.path.join(outdir, 'obia_classification2.tif')
+
+outmeta = meta.copy()
+outmeta.update(dtype='uint8',
+               nodata=0,
+               count=1)
+with rio.open(outfile, 'w', **outmeta) as dst:
+    dst.write(prediction.astype(rio.uint8))
+
+
+
+
+
+
+
+
+
+
+
+
+############### old ###############
 obi = []
 
 for o in objects:
     if np.isnan(o).any() == False:
         obi.append(o)
-
-predicted = rf.predict(obi)  # predict with rf classifier
-
 
 # create numpy array from rf classifiation and save to raster
 clf = np.copy(segments)
