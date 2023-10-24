@@ -30,7 +30,7 @@ from sklearn import metrics
 from sklearn.model_selection import cross_val_score, RepeatedKFold, RepeatedStratifiedKFold
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-
+from skimage.feature import graycomatrix, graycoprops
 
 def getPolyFeatures(gdf):
     import json
@@ -188,7 +188,7 @@ fp_polymask = 'D:\\Users\\E1008409\\MK\\S2\\ac\\S2B_MSIL1C_20190903T100029_N0208
 fp_pca = '/mnt/d/users/e1008409/MK/worldview/pori/ac/pca/L2W_VIS_PCA.tif'
 #fp_depth = 'D:\\Users\\E1008409\\MK\\syvyysmalli\\depth_20210126_10m_32634_T34WFT.tif'
 #fp_depth = '/mnt/d/users/e1008409/MK/worldview/pori/sdb/14SEP08103623-M2AS-015473758110_01_P001_toa_reflectance_clip_deglint_ndvi_watermask_median3x3_filt_RFRegressor_SDB_cbybybrgygr.tif'
-fp_depth = '/mnt/d/users/e1008409/MK/worldview/pori/ac/sdb/WorldView2_2014_09_08_10_36_23_L2W_Rrs_clip_median3x3_filt_RFRegressor_SDB_allpts_gryrtgi_masked.tif'
+fp_depth = '/mnt/d/users/e1008409/MK/worldview/pori/ac/sdb/WorldView2_2014_09_08_10_36_23_L2W_Rrs_clip_median3x3_filt_RFRegressor_SDB_allpts_gryrtgi_masked3.tif'
 fp_depth2 = '/mnt/d/users/e1008409/MK/syvyysmalli/depth_20210126_clipped_transformed_pori_bilinear2m_32634.tif'
 
 fp_s2_704 = 'D:\\Users\\E1008409\\MK\\S2\\ac\\S2B_MSIL1C_20190903T100029_N0208_R122_T34WFT_20190903T121103\\S2B_MSI_2019_09_03_10_02_29_T34WFT_L2W_Rrs_704_bilinear10m.tif'
@@ -275,9 +275,9 @@ elapsed = end - start
 print('Time elapsed: %.2f' % elapsed, 'seconds')
 
 # mask nodata area
-segments = np.where(nodatamask == True, 0, segments)
-# reshape
-segments = segments.reshape(1,segments.shape[0], segments.shape[1])
+segments = np.where(nodatamask == True, 0 ,segments)
+# expand dimensions
+segments = np.expand_dims(segments, axis=0)
 # save the segments
 #segdir = os.path.join(os.path.dirname(os.path.dirname(fp)))
 segdir = os.path.join(os.path.dirname(fp), 'segment')
@@ -311,11 +311,12 @@ with rio.open(segfile) as src:
 
 # indices and band ratios
 ndvi = normalizedDifference(img, (6,4))
-yrvi = normalizedDifference(img, (3,4))
-rervi = normalizedDifference(img, (5,4))
+#yrvi = normalizedDifference(img, (3,4))
+#rervi = normalizedDifference(img, (5,4))
+gbi = normalizedDifference(img, (2,1))
 eg = EG(img, (1,2,4))
 grvi = normalizedDifference(img, (2,4))
-vari = VARI(img, (4,2,1))
+#vari = VARI(img, (4,2,1))
 gcc = GCC(img, (1,2,4))
 
 print('NDVI min %.2f, max %.2f' % (np.nanmin(ndvi), np.nanmax(ndvi)))
@@ -353,28 +354,51 @@ wv2_ms_central50_wl = [427.3, 477.9, 546.2, 607.8, 658.8, 723.7, 831.3, 908.0]
 wv2_ms_central05_wl = [427.0, 478.3, 545.8, 607.7, 658.8, 724.1, 832.9, 949.3]
 tgi = TGI(img, [1,2,4], wv2_ms_central50_wl)
 
+#%% 
+# normalize image values to int
+import cv2
+norm_eg = cv2.normalize(eg, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F)
+norm_eg = norm_eg.astype(np.uint8)
+# apply clahe
+clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+eg_eq = clahe.apply(norm_eg)
+#mask nodata
+eg_eq = np.where(norm_eg==0, 0, eg_eq)
+# save 
+outdir = os.path.join(os.path.dirname(fp), 'aux_layers')
+aux_out = os.path.join(outdir, 'eg_8bit_clahe.tif')
+auxmeta = meta.copy()
+auxmeta.update(count=1,
+               nodata=0,
+               dtype='uint8')
+with rio.open(aux_out, 'w', **auxmeta, compression='LZW') as dst:
+    dst.write(eg_eq.astype(auxmeta['dtype']),1)
+  
+# compute GLCM features from excess greenness
+
+#%%
 # stack to image
 img = img.transpose(1,2,0)
-ndvi = ndvi.reshape(1, ndvi.shape[0], ndvi.shape[1])
-grvi = grvi.reshape(1, grvi.shape[0], grvi.shape[1])
+#ndvi = ndvi.reshape(1, ndvi.shape[0], ndvi.shape[1])
+#grvi = grvi.reshape(1, grvi.shape[0], grvi.shape[1])
 tgi = tgi.reshape(1, tgi.shape[0], tgi.shape[1])
 gcc = gcc.reshape(1, gcc.shape[0], gcc.shape[1])
-vari = vari.reshape(1, vari.shape[0], vari.shape[1])
+#vari = vari.reshape(1, vari.shape[0], vari.shape[1])
 eg = eg.reshape(1, eg.shape[0], eg.shape[1])
-ndvi = ndvi.transpose(1,2,0)
-grvi = grvi.transpose(1,2,0)
+#ndvi = ndvi.transpose(1,2,0)
+#grvi = grvi.transpose(1,2,0)
 tgi = tgi.transpose(1,2,0)
 gcc = gcc.transpose(1,2,0)
-vari = vari.transpose(1,2,0)
+#vari = vari.transpose(1,2,0)
 eg = eg.transpose(1,2,0)
-depth = depth.transpose(1,2,0)
+#depth = depth.transpose(1,2,0)
 pca = pca.transpose(1,2,0)
-stack = np.dstack((img, ndvi, grvi, tgi, gcc, vari, eg, depth, pca))
+stack = np.dstack((img[:,:,1:5], tgi, gcc, eg, pca[:,:,0:3])) # only visible bands and 3 first from pca
 
 # stack segments to image
-segments = segments.transpose(1,2,0)
-stack = np.dstack((stack, segments))
-stack = np.where(stack == 0, np.nan, stack)
+#segments = segments.transpose(1,2,0)
+#stack = np.dstack((stack, segments))
+#stack = np.where(stack == 0, np.nan, stack)
 # tranpose
 stack = stack.transpose(2,0,1)
 segments = segments.transpose((2,0,1))
@@ -386,14 +410,14 @@ ndvimeta.update(count=1)
 with rio.open(ndviout, 'w', **ndvimeta) as dst:
     dst.write(ndvi.astype(rio.float32))
 # save tgi
-outdir = os.path.join(os.path.dirname(fp_test), 'aux_layers')
+outdir = os.path.join(os.path.dirname(fp), 'aux_layers')
 if os.path.isdir(outdir) == False:
     os.mkdir(outdir)
-tgi_out = os.path.join(outdir, 'tgi2.tif')
-tgimeta = meta.copy()
-tgimeta.update(count=1)
-with rio.open(tgi_out, 'w', **tgimeta) as dst:
-    dst.write(tgi.astype(rio.float32),1)
+aux_out = os.path.join(outdir, 'gcc.tif')
+auxmeta = meta.copy()
+auxmeta.update(count=1)
+with rio.open(aux_out, 'w', **auxmeta) as dst:
+    dst.write(gcc.astype(rio.float32),1)
   
 img = img.transpose(2,0,1)
 # threshold mask of optical depth
@@ -414,19 +438,7 @@ testmeta.update(count=1,
 with rio.open(testout, 'w', **testmeta) as dst:
     dst.write(test.astype(rio.uint8),1)
     
-
-from skimage.segmentation import chan_vese
-
-chvese = chan_vese(tgi[:,:,0])    
-chvese = chvese.reshape(1, chvese.shape[0], chvese.shape[1])
-# mask deep water areas from segments
-chvese = np.where((depthmodel < -6) | (depthmodel == 0), 0, chvese)
-# save
-chanvese_out = os.path.join(segdir, 'tgi_chanvese.tif')
-with rio.open(chanvese_out, 'w', **upmeta, compress='LZW') as dst:
-    dst.write(chvese.astype(rio.uint32))
-
-    
+#%%    
 ##############
 # 3. Extract spectral features for segments
 ##############
@@ -459,8 +471,8 @@ def segment_features(segment_pixels):
 #with rio.open(segfile) as src:
 #    segments = src.read()
 #    segmeta = src.meta
-###############
-# Spetral properties of segments
+
+
 # Compute statistics and indices for segments
 ###############
 
@@ -601,49 +613,19 @@ for i in result[0]:
 #end_time = time.time()
 #print('Processed in %.3f minutes' % ((end_time - start)/60))
 
-# reshape for unsupervised classification
-stats = np.zeros(shape=segments.shape)
-ob_len = np.arange(0,len(objects[0]))
 
-for o in object_ids:
-    stats = np.where(segments == o, objects[object_ids.index(o)][2], stats)
-stats = stats.reshape(-1,1)
-
-# nan or inf to 0
-stats = np.where(np.isfinite(stats), stats, 0)
-
-# ------------------------ # 
-# unsupervised classification
-# ------------------------ #
-from sklearn.cluster import k_means
-
-kmeans = k_means(stats, n_clusters=5)
-# back to 2-d array
-clustered = kmeans[1].reshape(segments[0].shape)
-plt.imshow(clustered)
-
-# save
-unsup_dir = os.path.join(os.path.dirname(fp_test), 'result')
-if os.path.isdir(unsup_dir) == False:
-    os.mkdir(unsup_dir)
-unsup_out = os.path.join(unsup_dir, 'n5_clustered.tif')
-unsup_meta = meta.copy()
-unsup_meta.update(dtype='int32',
-                  nodata=0)
-
-with rio.open(unsup_out, 'w', **unsup_meta) as dst:
-    dst.write(clustered.astype(rio.int32),1)
-
+#%%
 ################
 # supervised classification
 # 4. read ground truth
-fp_gt = "/mnt/d/users/e1008409/MK/Velmu-aineisto/velmudata_07112022_ketokari_pori_savcov_brgrrealgae_classes.gpkg"
+fp_gt = "/mnt/d/users/e1008409/MK/Velmu-aineisto/velmudata_07112022_ketokari_pori_sav_edited_brgralgae_classes_merge.gpkg"
 #fp_gt = 'D:\\Users\\E1008409\\MK\\Velmu-aineisto\\velmudata_07112022_edit_bcover_subhighvasc_algae_2019+-1_T34WFT.gpkg'
 #fp_gt = '/mnt/d/users/e1008409/MK/Velmu-aineisto/velmudata_07112022_pori_new.gpkg'
 gdf = gpd.read_file(fp_gt)
 
 # select 
-gdf = gdf[((gdf.new_class != 7) & (gdf.syvyys_mitattu >= -3)) | (gdf.new_class == 7)]
+#gdf = gdf[((gdf.new_class != 7) & (gdf.syvyys_mitattu >= -3)) | (gdf.new_class == 7)]
+gdf = gdf[gdf.new_class != 0]
 
 # check crs
 src = rio.open(fp)
@@ -723,8 +705,21 @@ gdf['segment_ids'] = [x for x in src.sample(coords)]
 src.close()
 # extract list
 gdf['segment_ids'] = gpd.GeoDataFrame(gdf.segment_ids.tolist(), index=gdf.index)
+
+# sample depth model
+src = rio.open(fp_depth)
+gdf['depthmodel'] = [x for x in src.sample(coords)]
+# close dataset
+src.close()
+# extract list
+gdf['depthmodel'] = gpd.GeoDataFrame(gdf.depthmodel.tolist(), index=gdf.index)
+# depth vs depth model difference
+gdf['depthdiff'] = abs(abs(gdf.syvyys_mitattu) - gdf.depthmodel)
+# exclude large differences
+#gdf = gdf[gdf.depthdiff < 1]
 # drop nan
 gdf = gdf[gdf['ndvi'].notna()]
+
 
 ###### check that points (buffered) are within one segment 
 # buffer
@@ -821,7 +816,6 @@ gt_d = gt_d.rename(columns={'index': 'segment_id'})
 # join geometry to unified gt
 gt_d = gt_d.merge(gdf[['segment_ids', 'geometry']], how='left', left_on='segment_id', right_on='segment_ids')
 
-
 ############################
 # Assign class labels to segments
 ############################
@@ -838,13 +832,163 @@ stack_re = np.where(np.isnan(stack_re), 0, stack_re)
 
 # save gt
 gtout = gt.reshape((1,meta['height'], meta['width']))
-gt_out = os.path.join(segdir, 'n' + str(n) + '_gt.tif')
+gt_out = os.path.join(segdir, 'n' + str(n) + '_gt_edit.tif')
 with rio.open(gt_out, 'w', **upmeta) as dst:
     dst.write(gtout.astype(rio.uint32))
+# read 
+with rio.open(gt_out) as src:
+    gtout = src.read()
+gt = gtout.reshape(-1)
 
+
+#%%
+###############
+# Spetral properties of segments
+# Plot image spectra in segments per class and depth
+
+depth = np.transpose(depth, (2,0,1))
+# depth zones
+dzones = []
+n = 0
+while n < 4:
+    dzone = (n, n+1)
+    dzones.append(dzone)
+    n += 1
+
+# classes
+gt_t = np.where(gt == 5, 6, gt)
+klass = np.unique(gt_t)[1:-1] # skip 0
+
+# create plot by depth and classes
+fig, ax = plt.subplots(2,2)
+h, j= 0,0
+colors = ['#1a7e1d', '#888f29', 'purple', 'yellow']
+labs = ['Mixed SAV', 'Brown algae', 'Green algae', 'Bare']
+bands = [427, 478, 546, 608, 659, 724, 831]
+ylim = 0
+for i in dzones:
+    #print(i)
+    sel = np.where((depth > i[0]) & (depth < i[1]), img, np.nan)
+    dw = np.where(gt == 7, img, np.nan)
+    dw = dw.reshape(7,-1)
+    dwmean = np.nanmean(dw, axis=1)
+   # print(h,j)
+    for k in klass:
+       # print(i, k)
+        c = np.where(klass==k)[0][0]
+        sel_k = np.where(gt == k, sel, np.nan)
+        
+        test = sel_k.reshape(7,-1)
+        tmean = np.nanmean(test,axis=1) # compute means for each band
+        tmean_max = tmean.max()
+        if tmean_max > ylim:
+            ylim = tmean_max # update upper y limit if larger
+        ax[h,j].plot(tmean, color=colors[c], label=labs[c], lw=0.7)
+        dw_plot = ax[h,j].plot(dwmean, color='blue', linestyle='--', lw=0.7)
+        ax[h,j].set_title('Depth ' + str(i[0]) + '-' + str(i[1])+ ' m')
+        ax[h,j].set_ylim(0, ylim+0.005)
+        ax[h,j].set_xticks(list(np.arange(len(bands))))
+        ax[h,j].set_xticklabels(bands)#, rotation=75)
+        ax[h,j].set_facecolor(color='#D9D9D9')
+        ax[h,j].grid(color='black', linewidth=0.4)
+    j += 1    
+    if j > 1:
+        j = 0
+        h += 1
+        if h > 1:
+            h = 0
+        
+handles, labels = ax[0,0].get_legend_handles_labels()
+handles.append(dw_plot[0])
+labels.append('Deep water')
+lgd = fig.legend(handles, labels, loc='upper right', bbox_to_anchor=(1.25, 0.8))
+plt.suptitle('Average spectra comparison from \n segmented ground truth areas at different depths')
+#fig.supxlabel('Wavelength (nm)')
+plt.tight_layout()
+plt.savefig(os.path.join(os.path.dirname(fp), 'plots', 'mean_spectra_comparison.png'), dpi=150,
+            bbox_extra_artists=(lgd,), bbox_inches='tight')
+plt.show()
+
+#%%
+#-----------------------------
+# create training data by whole segments
+# segments and classes to df
+ts = pd.DataFrame({'segments': segments.reshape(-1), 'classes':gtout.reshape(-1)})
+ts = ts[(ts.segments > 0) & (ts.classes > 0)]
+# group by 
+ts = ts.groupby(by='segments').mean()
+ts = ts.reset_index()
+# split segment ids to train, validation, test
+X_train_ts, X_test_ts, y_train_ts, y_test_ts = train_test_split(ts.segments, ts.classes,
+                                                    test_size=0.2,
+                                                    random_state=42, shuffle=True,
+                                                    stratify=ts.classes)
+
+#X_train_ts, X_val_ts, y_train_ts, y_val_ts = train_test_split(X_train_ts, y_train_ts,
+#                                                  test_size = 0.25,
+#                                                  random_state=42, shuffle=True,
+#                                                  stratify=y_train_ts)
+# select data based on segment ids
+X_train_seg = np.zeros(shape=segments.shape)
+#X_val_seg = np.zeros(shape=segments.shape)
+X_test_seg = np.zeros(shape=segments.shape)
+
+for s in np.unique(X_train_ts):
+    X_train_seg = np.where(segments == s, segments, X_train_seg)
+#for s in np.unique(X_val_ts):
+#    X_val_seg = np.where(segments == s, segments, X_val_seg)
+for s in np.unique(X_test_ts):
+    X_test_seg = np.where(segments == s, segments, X_test_seg)
+    
+X_train = np.where(X_train_seg > 0, stack, 0)
+#X_val = np.where(X_val_seg > 0, stack, 0)
+X_test = np.where(X_test_seg > 0, stack, 0)
+
+y_train = np.where(X_train_seg > 0, gtout, 0)
+y_test = np.where(X_test_seg > 0, gtout, 0)
+
+
+#%%
+# extract features for RF classification using convolution layers 
+
+# ---------------------
+# feature extractor for RF
+from keras.models import Sequential
+from keras.layers import Conv2D, MaxPooling2D, Flatten, BatchNormalization
+activation = 'relu'
+N=7
+feat_extractor = Sequential()
+feat_extractor.add(Conv2D(32, N, activation=activation, padding='same', input_shape=(psize,psize,N)))
+feat_extractor.add(Conv2D(32, N, activation=activation, padding='same', kernel_initializer='he_normal'))
+#feat_extractor.add(BatchNormalization())
+
+#feat_extractor.add(Flatten())
+# =============================================================================
+# feat_extractor.add(Conv2D(64, N, activation=activation, kernel_initializer='glorot_uniform', padding='same'))
+# feat_extractor.add(BatchNormalization())
+# feat_extractor.add(Conv2D(64, N, activation=activation, kernel_initializer='glorot_uniform', padding='same'))
+# feat_extractor.add(BatchNormalization())
+# feat_extractor.add(MaxPooling2D())
+# feat_extractor.add(Flatten())
+# 
+# =============================================================================
+# features
+X = feat_extractor.predict(X_train)
+X = X.reshape(-1, X.shape[-1])
+y = y_train.reshape(-1)
+# to dataframe
+df = pd.DataFrame(X)
+df['label'] = y
+
+
+
+#%%
+######################
+# Machine learning
 # normalize data
 from sklearn.preprocessing import normalize
 stack_re_n = normalize(stack_re, axis=1)
+
 
 # train test data
 X = stack_re_n[gt > 0]
@@ -900,11 +1044,13 @@ predf = pd.DataFrame()
 predf['truth'] = y_test
 predf['predict'] = svm_clf.predict(X_test)
 
+
+
 #############################
 # Random Forest classifier
 
 # set range of trees to test in RF
-n_est = np.arange(10, 150, 5)
+n_est = np.arange(60, 200, 20)
 # list of oob errors
 oob_scores = []
 #n_est = [100]
@@ -924,10 +1070,38 @@ fig, ax = plt.subplots()
 ax.plot(n_est, oob_scores, lw=0.5, color='black')
 plt.show()
 
+# select number of trees
+# random forest classifier
+rf = RandomForestClassifier(n_estimators=120, max_depth=None, n_jobs=5 ,max_features='sqrt', bootstrap=True, oob_score=True,
+                            random_state=42)
+rf.fit(X_train, y_train)
+
 # CV
 cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=1)
 n_scores = cross_val_score(rf, X_test, y_test, cv=cv, scoring='accuracy')
 print('n=',str(n), '%.3f (%.3f)' % (np.mean(n_scores), np.std(n_scores)))
+
+# check most meaningful variables
+feature_names = ['b2', 'b3', 'b4', 'b5', 
+                 'tgi', 'gcc', 'eg',
+                 'pca1', 'pca2', 'pca3'] #img, ndvi, grvi, tgi, gcc, vari, eg, depth, pca
+importances = rf.feature_importances_
+rf_importance = pd.Series(importances, index=feature_names)
+# plot
+fig, ax = plt.subplots()
+rf_importance.plot.bar(ax=ax)
+plt.tight_layout()
+plt.show()
+# permutation importance
+from sklearn.inspection import permutation_importance
+perm_result = permutation_importance(
+    rf, X_test, y_test, n_repeats=10, random_state=42, scoring='accuracy')
+rf_perm_importance = pd.Series(perm_result.importances_mean, index=feature_names)
+# plot
+fig, ax = plt.subplots()
+rf_perm_importance.plot.bar(yerr=perm_result.importances_std, ax=ax)
+plt.tight_layout()
+plt.show()
 
 predf = pd.DataFrame()
 predf['truth'] = y_test
@@ -936,26 +1110,44 @@ predf['predict'] = rf.predict(X_test)
 #predf = predf.join(y['seg_id'])
 #predf = predf.drop_duplicates()
 
+
+#%%
 ##################################
 # Multi-layer perceptron
 from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 
+from keras.models import Sequential
+from keras.layers import Flatten, Dense
+
+# reshape
+X_train = X_train.reshape(-1,20)
+X_test = X_test.reshape(-1,20)
+y_train = y_train.reshape(-1,1)
+y_test = y_test.reshape(-1,1)
+
 # test
-gt_n = np.where(gt == 5, 6, gt)
+#gt_n = np.where(gt == 5, 6, gt)
 # train test data
 X = stack_re[gt > 0]
-y = gt_n[gt_n > 0]
+y = gt[gt > 0]
 
-X_train, X_test, y_train, y_test = train_test_split(X, y,
-                                                    test_size=0.3,
+X_train, X_test, y_train, y_test = train_test_split(X, y,                 
+                                                    test_size=0.2,
                                                     random_state=42, shuffle=True,
                                                     stratify=y)
+    
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train,
+                                                  test_size = 0.25,
+                                                  random_state=42, #suffle=True,
+                                                  stratify=y_train)
+    
 # standard scale data
-scaler = StandardScaler().fit(X_train)
-X_train_scaled = scaler.transform(X_train)
-# same transformation to test data
-X_test_scaled = scaler.transform(X_test)
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+# standard scale validation data
+X_val_scaled = scaler.fit_transform(X_val)
+X_test_scaled = scaler.fit_transform(X_test)
 
 clf = MLPClassifier(solver='lbfgs', max_iter=5000, random_state=42)
 clf.fit(X_train_scaled, y_train)
@@ -964,8 +1156,12 @@ clf.fit(X_train_scaled, y_train)
 predf = pd.DataFrame()
 predf['truth'] = y_test
 predf['predict'] = clf.predict(X_test_scaled)
+# ensure dtype
+predf['truth'] = predf['truth'].astype(int)
+predf['predict'] = predf['predict'].astype(int)
 
 
+#%%
 #######################
 # classification report
 print(metrics.classification_report(y_test, predf.predict))
@@ -980,10 +1176,10 @@ rowtotal = cm.sum(axis=1)
 # create cm DataFrame
 cmdf = np.vstack([cm,total])
 b = np.array([[rowtotal[0]], [rowtotal[1]], [rowtotal[2]], 
-              [rowtotal[3]], [rowtotal[4]], #[rowtotal[5]],
+              [rowtotal[3]], [rowtotal[4]], [rowtotal[5]],
               [rowtotal.sum()]])
 cmdf = np.hstack((cmdf, b))
-cols = ['Mixed\nSAV', 'Brown\nalgae', 'Green\nalgae', 'Bare or\n LowSAV', 'Deep\n water', 'Total']
+cols = ['Mixed\nSAV', 'Brown\nalgae', 'Green\nalgae', 'Bare or\n LowSAV', 'Deep\n SAV', 'Deep\n water', 'Total']
 cmdf = pd.DataFrame(cmdf, index=cols,
                     columns = cols)
 
@@ -1005,7 +1201,7 @@ ax.tick_params(axis='both', which='both', length=0)
 #fig.suptitle('Bottomtype classification accuracy')
 fig.suptitle('MLP Benthic classification')
 plt.tight_layout()
-plt.savefig(os.path.join(os.path.dirname(fp), 'plots', 'mlp_2_confusion_matrix.png'), dpi=150, format='PNG')
+#plt.savefig(os.path.join(os.path.dirname(fp), 'plots', 'mlp_2_confusion_matrix.png'), dpi=150, format='PNG')
 print('Overall accuracy %.2f' % (o_accuracy))
 print('Users accuracy', u_accuracy)
 print('Producers accuracy', p_accuracy)
@@ -1025,12 +1221,11 @@ for i in np.arange(32,1024,2):
 patch_size = np.max(modulos)        
 
 # split for prediction
-split_array = np.split(stack_re, patch_size, axis=0)
+split_array = np.split(stack_re_n, patch_size, axis=0)
 j = 0
 for i in split_array: # NOTE: parallelize
-    # standard scale patch
-    i_scaled = scaler.transform(i)
-    prediction = clf.predict(i_scaled)
+    prediction = rf.predict(i)
+#    prediction = rf.predict_proba(i)
     preds.append(prediction)
     print(str(j),'/',str(len(split_array)))
     j += 1
@@ -1042,7 +1237,7 @@ predicted = predicted.reshape(stack_re.shape[0])
 predicted = predicted.reshape(1, meta['height'], meta['width'])
 
 # predict as large single array
-#prediction = rf.predict(stack_re)
+#prediction = rf.predict(stack_re_n)
 # prediction back to 2D array
 #predicted = prediction.reshape(1,img.shape[1], img.shape[2])
 
@@ -1057,7 +1252,7 @@ predicted = np.where((ndvi >= 0) & (ndvi < 0.2), 9, predicted)
 outdir = os.path.join(os.path.dirname(fp), 'classification')
 if os.path.isdir(outdir) == False:
     os.mkdir(outdir)
-outfile = os.path.join(outdir, os.path.basename(fp).split('.')[0] + '_segmpix_multiclass_pca_MLPclassification_simpler.tif')
+outfile = os.path.join(outdir, os.path.basename(fp).split('.')[0] + '_segmpix_multiclass_vis_index_pca_RFclassification_edited2_sav_brgralg.tif')
 # update metadata
 upmeta = meta.copy()
 upmeta.update(dtype='uint8',
@@ -1067,7 +1262,67 @@ upmeta.update(dtype='uint8',
 with rio.open(outfile, 'w', **upmeta, compress='LZW') as dst:
     dst.write(predicted.astype(rio.uint8))
 
+#################################
+# predict probabilities
+j = 0
+pred_probs = [] 
+for i in split_array: # NOTE: parallelize
+    prediction_prob = rf.predict_proba(i)
+#    prediction = rf.predict_proba(i)
+    pred_probs.append(prediction_prob)
+    print(str(j),'/',str(len(split_array)))
+    j += 1
+# predictions to single array
+pred_prob = np.stack(pred_probs)
+pred_prob = pred_prob.reshape(stack_re.shape[0],6) 
+# prediction back to 2D array
+predicted_proba = pred_prob.reshape(meta['height'], meta['width'], 6)
+# transpose
+predicted_proba = predicted_proba.transpose((2,0,1))
+# mask nodata
+predicted_proba = np.where(nodatamask == True, np.nan, predicted_proba)
+# select 1 layer (brown algae)
+proba_out = predicted_proba[1,:,:]
+proba_out = np.expand_dims(proba_out, axis=0)
+# outfile
+outfile = os.path.join(outdir, os.path.basename(fp).split('.')[0] + '_segmpix_multiclass_vis_index_pca_RFclassification_edited_brownalgae_proba.tif')
+# update metadata
+probameta = meta.copy()
+probameta.update(dtype=proba_out.dtype.name,
+              nodata=np.nan,
+              count=1)
 
+with rio.open(outfile, 'w', **probameta, compress='LZW') as dst:
+    dst.write(proba_out.astype(probameta['dtype']))
+
+
+############################
+# downsample to 20m pixel resolution (rasterio may not produce exact int cell size)
+from rasterio.enums import Resampling
+scale_factor = 2/20
+
+with rio.open(outfile) as ds:
+    # resample data to target shape
+    d = ds.read(
+        out_shape=(ds.count,
+                   int(ds.height*scale_factor),
+                   int(ds.width*scale_factor),
+        ),
+        resampling=Resampling.average)
+    # scale transform
+    transform = ds.transform*ds.transform.scale(
+        ds.width / d.shape[-1],
+        ds.height / d.shape[-2])
+
+# write file
+resample_out = os.path.join(outdir, outfile.split('.')[0] + '_resample_20m.tif')
+# meta
+resample_meta = probameta.copy()
+resample_meta.update(height=d.shape[-2],
+                     width=d.shape[-1],
+                     transform=transform)
+with rio.open(resample_out, 'w', **resample_meta, compress='LZW') as dst:
+    dst.write(d.astype(resample_meta['dtype']))
 
 
 ######################################
