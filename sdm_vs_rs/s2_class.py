@@ -1,0 +1,879 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Nov  7 13:13:09 2023
+
+
+
+
+@author: E1008409
+"""
+
+
+import sys
+import os
+os.getcwd()
+os.chdir('/mnt/c/users/e1008409/.spyder-py3')
+import time
+import glob
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+import rasterio as rio
+import matplotlib.pyplot as plt
+
+from indices import normalizedDifference, EG, GCC, TGI
+
+from skimage.segmentation import felzenszwalb
+from rasterstats import zonal_stats
+from sklearn import metrics
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+    
+def computePCA(img):
+    # flatten each band
+    flat_data = np.empty((img.shape[1]*img.shape[2], img.shape[0]))
+
+    for i in range(img.shape[0]):
+        band = img[i,:,:]
+        flat_data[:,i-1] = band.flatten()
+    # replace nan
+    flat_data = np.where(np.isnan(flat_data), 0, flat_data)
+    # delete nan
+    test = np.delete(flat_data, np.where(flat_data == 0), axis=0)
+
+    # sklearn PCA
+    from sklearn.decomposition import PCA
+    pca = PCA()
+    pca.fit(test)    
+    # apply pca
+    pca_out = pca.transform(flat_data)
+    # reshape 
+    pca_out = np.reshape(pca_out, (img.shape[1], img.shape[2], img.shape[0]))
+    pca_out = np.transpose(pca_out, (2,0,1))
+    # select pc's that explain 99% of variation
+    #pca_out = pca_out[0:3,:,:]
+    return pca_out    
+
+
+#fp_img = '/mnt/d/users/e1008409/MK/S2/ac/S2A_MSIL1C_20160913T100022_N0204_R122_T34VEP_20160913T100023/S2A_MSI_2016_09_13_10_00_23_T34VEP_L2W_RrsB2B3B4B8_clip.tif'
+fp_img = '/mnt/d/users/e1008409/MK/S2/c2rcc/subset_L1C_T34VEP_A006411_20160913T100023_s2resampled_10_C2RCC_Rrs_clip_median3x3_filt.tif'
+#fp_pt_indices = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/test_stratifiedKFold_indices.json'
+fp_depth = '/mnt/d/users/e1008409/MK/syvyysmalli/depth_20210126_10m_32634_T34VEP.tif'
+fp_img = '/mnt/d/users/e1008409/MK/worldview/pori/ac/WorldView2_2014_09_08_10_36_23_L2W_Rrs_clip_median3x3_filt.tif'
+fp_depth = '/mnt/d/users/e1008409/MK/syvyysmalli/depth_20210126_clipped_transformed_pori_bilinear2m_32634.tif'
+fp_sdb = '/mnt/d/users/e1008409/MK/worldview/pori/ac/sdb/WorldView2_2014_09_08_10_36_23_L2W_Rrs_clip_median3x3_filt_deglint_ndvi_watermask_RFRegressor_SDB_allpts_gryrtgidii.tif'
+
+
+# read
+with rio.open(fp_img) as src:
+    img = src.read()
+    meta = src.meta
+
+with rio.open(fp_depth) as src:
+    depth = src.read()
+    dmeta = src.meta
+with rio.open(fp_sdb) as src:
+    sdb = src.read()
+    sdbmeta = src.meta
+sdb = sdb * (-1)
+# masked sdb
+sdb_m = np.where((sdb > -4) & (depth > -4) & ((np.abs(sdb) - np.abs(depth)) < 1), sdb, depth)
+sdb_m = np.where(sdb_m == dmeta['nodata'], np.nan, sdb_m)
+# save
+sdb_out = os.path.join(os.path.dirname(fp_sdb), 'RFRegressor_SDB_depth_combined.tif')
+with rio.open(sdb_out, 'w', **sdbmeta, compress='LZW') as dst:
+    dst.write(sdb_m.astype(sdbmeta['dtype']))
+
+depth = sdb_m
+
+# change depth meta
+depth = np.where(depth == dmeta['nodata'], 0, depth)
+
+# mask deepest 
+img = np.where(depth < -5, meta['nodata'], img)
+# convert depth to abs values
+depth = np.abs(depth)
+
+# compute ndvi, ndti
+#ndvi = normalizedDifference(img, (3,2))
+# mask image 
+#img = np.where(ndvi > 0, meta['nodata'], img)
+img = np.where(img[2] < 0.001, meta['nodata'], img) # green band value
+
+img2 = np.where((img[4] > 0.0015) & (depth > 0.5), meta['nodata'], img)
+
+# nodata mask
+if meta['nodata'] == None:
+    print('Nodata not defined')
+elif np.isnan(meta['nodata']):
+    nodatamask = np.where(np.isnan(img[0]), True, False)
+else:
+    nodatamask = np.where(img[0] == meta['nodata'], True, False)
+
+# define nodata
+#meta.update(nodata=0)
+
+# save masked image
+img_out = fp_img.split('.tif')[0] + '_masked_re.tif'
+with rio.open(img_out, 'w', **meta) as dst:
+    dst.write(img2.astype(meta['dtype']))
+
+#####################
+# 2. segment image
+# set some parameters
+n = 3
+sig = 0.001
+s = 0.0010
+
+# segmentation algorithms
+start = time.time()
+segments = felzenszwalb(img, scale=s, sigma=sig, min_size=n, channel_axis=0)
+#segments = quickshift(img, ratio=1.0, kernel_size=5, max_dist=10, convert2lab=False)
+#segments = slic(img, n_segments=n, compactness=0.01, sigma=sig, convert2lab=True, channel_axis=0, mask=datamask[0])
+#segments = watershed(img_scaled)
+end = time.time()
+#segments = felzenszwalb(img_scaled, scale=1, sigma=0.9, min_size=20, multichannel=True)
+elapsed = end - start
+print('Time elapsed: %.2f' % elapsed, 'seconds')
+# mask nodata area
+segments = np.where(nodatamask == True, 0, segments)
+# expand dims
+segments = np.expand_dims(segments, axis=0)
+
+# save the segments
+#segdir = os.path.join(os.path.dirname(os.path.dirname(fp)))
+segdir = os.path.join(os.path.dirname(fp_img), 'segment')
+if os.path.isdir(segdir) == False:
+    os.mkdir(segdir)    
+segfile = os.path.join(segdir, os.path.basename(fp_img).split('.')[0] + 'ndvimasked_segments_rgb_scale_' + str(n) + '_' +
+                       str(s) + '_' + str(sig) + 'sigma_felzenszwalb.tif') #sigma_felzenszwalb
+# update metadata
+upmeta = meta.copy()
+upmeta.update(
+    dtype = rio.uint32,
+    nodata = 0,
+    count = 1)
+# save
+with rio.open(segfile, 'w', **upmeta) as dst:
+    dst.write(segments.astype(upmeta['dtype']))
+# read segments image
+with rio.open(segfile) as src:
+    segments = src.read()
+
+# compute pca
+pca = computePCA(img)
+pca = np.where(nodatamask == True, np.nan, pca)
+
+# save pca
+pcadir = os.path.join(os.path.dirname(fp_img), 'pca')
+if os.path.isdir(pcadir) == False:
+    os.mkdir(pcadir)
+pcaout = os.path.join(pcadir, 'pca.tif')
+pcameta = meta.copy()
+pcameta.update(count=pca.shape[0])
+with rio.open(pcaout, 'w', **pcameta, compress='LZW') as dst:
+    dst.write(pca.astype(pcameta['dtype']))
+# compute indices
+gbi = normalizedDifference(img, (2,1))
+eg = EG(img, (1,2,4))
+gcc = GCC(img, (1,2,4))
+tgi = TGI(img, [1,2,4], 'WV-2')
+#ndvi = normalizedDifference(img, (3,2))
+#ndti = normalizedDifference(img, (2,1))
+# band ratios
+bg = img[1]/img[2]
+gr = img[2]/img[4]
+bg = np.expand_dims(bg, axis=0)
+gr = np.expand_dims(gr, axis=0)
+gbi = np.expand_dims(gbi, axis=0)
+# stack to image
+img = img.transpose(1,2,0)
+#ndvi = ndvi.reshape(1, ndvi.shape[0], ndvi.shape[1])
+#ndti = ndti.reshape(1, ndti.shape[0], ndti.shape[1])
+tgi = tgi.reshape(1, tgi.shape[0], tgi.shape[1])
+gcc = gcc.reshape(1, gcc.shape[0], gcc.shape[1])
+eg = eg.reshape(1, eg.shape[0], eg.shape[1])
+
+#ndvi = ndvi.transpose(1,2,0)
+#ndti = ndti.transpose(1,2,0)
+tgi = tgi.transpose(1,2,0)
+gcc = gcc.transpose(1,2,0)
+eg = eg.transpose(1,2,0)
+bg = bg.transpose(1,2,0)
+gr = gr.transpose(1,2,0)
+gbi = gbi.transpose(1,2,0)
+depth = depth.transpose(1,2,0)
+pca = pca.transpose(1,2,0)
+stack = np.dstack((img, tgi, gcc, eg, bg, gr, gbi, depth, pca[:,:,0:3]))
+
+img = np.transpose(img, (2,0,1))
+# save stack
+stack = np.transpose(stack, (2,0,1))
+# update nodata
+stack = np.where(nodatamask == True, np.nan, stack)
+stack_out = os.path.join(os.path.dirname(fp_img), os.path.basename(fp_img).split('.tif')[0] + '_stack.tif')
+stack_meta = meta.copy()
+stack_meta.update(dtype='float32',
+                  nodata=np.nan,
+                  count=stack.shape[0])
+with rio.open(stack_out, 'w', **stack_meta, compress='LZW') as dst:
+    dst.write(stack.astype(stack_meta['dtype']))
+
+# read stack
+with rio.open(stack_out) as src:
+    stack = src.read()
+
+# read ground truth and skf indices
+fp_gt = '/mnt/d/users/e1008409/MK/Velmu-aineisto/velmudata_07112022_T34VEP_3067_sav_fucus_sand_bare_classes_selcolumns.gpkg'
+#fp_ind = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/test_stratifiedKFold_indices.json'
+
+#import json
+gdf = gpd.read_file(fp_gt)
+#with open(fp_ind) as f:
+#    gdf_ind = json.load(f)
+
+# check crs
+src = rio.open(fp_img)
+if gdf.crs.to_epsg() != src.crs.to_epsg():
+    print('Reprojecting points')
+    gdf = gdf.to_crs(epsg=src.crs.to_epsg())
+src.close()
+
+# change classes
+#print(np.unique(gdf.new_class))
+#gdf.new_class = np.where(gdf.new_class == 4, 6, gdf.new_class)
+# create training data
+
+# check geometry, explode if MultiPoint
+if gdf.geometry.geom_type.str.contains('MultiPoint').any() == True:
+    sp = gdf.geometry.explode()
+    # get point coords
+    coords = [(x,y) for x,y in zip(sp.x, sp.y)]
+else:
+    # get point coords
+    coords = [(x,y) for x,y in zip(gdf.geometry.x, gdf.geometry.y)]
+
+# open image and sample segments
+src = rio.open(segfile)
+gdf['segment_ids'] = [x for x in src.sample(coords)]
+# close dataset
+src.close()
+# extract list
+gdf['segment_ids'] = gpd.GeoDataFrame(gdf.segment_ids.tolist(), index=gdf.index)
+
+# sample stack for pixel based classification
+src = rio.open(stack_out)
+gdf['img_stack'] = [x for x in src.sample(coords)]
+# close dataset
+src.close()
+# extract list
+stack_list = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7',
+              'tgi', 'gcc', 'eg', 'bg', 'gr', 'gbi', 'depth', 'pca1', 'pca2', 'pca3'] #'Band5', 'Band6', 'Band7', 'Band8a'
+gdf[stack_list] = gpd.GeoDataFrame(gdf.img_stack.tolist(), index=gdf.index)
+# select columns
+stack_list.append('new_class')
+stack_list.append('segment_ids')
+stack_list.append('sykeid')
+stack_list.append('geometry')
+stack_list.append('fucaceae_cov')
+# drop
+gdf = gdf[gdf.segment_ids != 0] # exclude 0 (nodata)
+
+gdf_train = gdf[stack_list]
+# drop nan rows
+gdf_train = gdf_train.dropna()
+# new index row starting from 0
+gdf_train['index2'] = range(0, len(gdf_train), 1)
+
+# save
+gdf_train_out = os.path.join(os.path.dirname(fp_gt), 'gdf_train_VHR.gpkg')
+gdf_train.to_file(gdf_train_out, driver='GPKG')
+##############
+# use below for segment based classification
+
+data = gdf[['segment_ids', 'savcov', 'new_class']]
+data = data.loc[(gdf_train.index.to_list())]
+data = data.rename(columns={'new_class': 'classes'})
+
+# remove any nan rows
+data = data[data.classes.notna()]
+data = data.astype(int)
+# segment ground truth
+gt_d = dict()
+
+from collections import Counter
+
+# get unique segment ids and class value
+for i in np.unique(data.segment_ids):
+    test = data[data.segment_ids == i]
+
+    # test if multiple classes within segment
+    if len(np.unique(test.classes)) > 1:
+        # find most common value
+        c = Counter(test.classes)
+        val, count = c.most_common()[0]
+        # if equal count of different values, get class from row with highest vegetation cover
+        if count == 1:
+            test['classes'][test.savcov == test.savcov.max()]
+        else:
+            print('Majority value in', i, val, 'with count', count)
+            # save to dict
+            gt_d[i] = val
+    else:
+        gt_d[i] = test.classes.iloc[0] # get first class value if all values are same
+
+# to dataframe
+gt_d = pd.DataFrame.from_dict(gt_d, orient='index', columns=['classes'])
+# reset index and rename column for later
+gt_d = gt_d.reset_index()
+gt_d = gt_d.rename(columns={'index': 'segment_id'})
+
+# join geometry to unified gt
+gt_d = gt_d.merge(gdf[['segment_ids', 'geometry']], how='left', left_on='segment_id', right_on='segment_ids')
+
+############################
+# Assign class labels to segments
+############################
+# new layer for segment classes
+new_layer = np.zeros(shape=segments.shape)
+
+# assign labels, this takes a little time
+for idx, row in gt_d.iterrows():
+    new_layer = np.where(segments == row.segment_ids, row.classes, new_layer) 
+new_layer = np.where(nodatamask==True, 0, new_layer)
+# reshape
+gt = new_layer.reshape((-1))
+stack_re = stack.reshape((stack.shape[0],-1)).transpose((1,0))
+stack_re = np.where(np.isnan(stack_re), 0, stack_re)
+
+
+# save gt
+gtout = gt.reshape((1,meta['height'], meta['width']))
+#gtout = np.where(gtout == 3, 5, gtout)
+gt_out = os.path.join(segdir, 'n' + str(n) + 'wv_gt_edit.tif')
+with rio.open(gt_out, 'w', **upmeta) as dst:
+    dst.write(gtout.astype(rio.uint32))
+
+# sample gt segments
+# get point coords
+coords = [(x,y) for x,y in zip(gdf_train.geometry.x, gdf_train.geometry.y)]
+src = rio.open(gt_out)
+gdf_train['gt_sampled'] = [x for x in src.sample(coords)]
+# close dataset
+src.close()
+# extract list
+gdf_train['gt_sampled'] = gpd.GeoDataFrame(gdf_train.gt_sampled.tolist(), index=gdf_train.index)
+# drop 0's
+gdf_train = gdf_train[gdf_train.gt_sampled != 0]
+#gdf_train = gdf_train[gdf_train.gt_sampled != 5]
+
+# Machine learning
+# normalize data
+from sklearn.preprocessing import normalize
+from sklearn.model_selection import cross_val_predict
+stack_re_n = normalize(stack_re, axis=1)
+
+# train test data
+X = stack_re_n[gt > 0]
+y = gt[gt > 0]
+
+
+#gdf_train.new_class = np.where(gdf_train.new_class == 3, 5, gdf_train.new_class)
+# train test from point data
+X_gdf = gdf_train.drop(['new_class'], axis=1)
+y_gdf = gdf_train['new_class']
+
+# normalize 
+#X_gdf = normalize(X_gdf)
+
+# random forest classifier
+rf = RandomForestClassifier(n_estimators=150, max_depth=None, n_jobs=5) #, max_features='sqrt',
+                         #   bootstrap=True, oob_score=True,
+                         #   random_state=42)
+
+# RFRegressor test
+X_gdf_r = gdf_train.drop(['new_class', 'segment_ids', 'sykeid', 'geometry', 'index2', 'fucaceae_cov'], axis=1)
+y_gdf_r = gdf_train['fucaceae_cov']
+
+X_train, X_test, y_train, y_test = train_test_split(X_gdf_r, y_gdf_r,
+                                                    test_size=0.3,
+                                                    random_state=42, shuffle=True)
+
+rfr = RandomForestRegressor(n_estimators=150, max_depth=None, n_jobs=5 ,max_features='sqrt',
+                            bootstrap=True, oob_score=True,
+                            random_state=42)
+
+rfr.fit(X_train, y_train)
+rfr.score(X_test, y_test)
+
+rfr_pred = pd.DataFrame()
+rfr_pred['true'] = y_test
+rfr_pred['pred'] = rfr.predict(X_test)
+from scipy.stats import pearsonr
+corr, _ = pearsonr(rfr_pred.pred, rfr_pred.true)
+print('Pearsons correlation: %.3f' % (corr))
+
+# plot predicted probability and observed coverage
+fig, ax = plt.subplots()
+ax.scatter(rfr_pred.true, rfr_pred.pred, s=0.7)
+ax.text(0, 0.9, 'Pearsons correlation: %.3f' % (corr))
+p1, p0 = np.polyfit(rfr_pred.true, rfr_pred.pred, deg=1)
+ax.axline(xy1=(0, p0), slope=p1, lw=0.5, color='black', alpha=0.7)
+ax.grid(alpha=0.5)
+ax.set_xlabel('Fucus coverage')
+ax.set_ylabel('Predicted')
+plt.title('Fucus cover to predicted probability WV-2')
+plt.tight_layout()
+# save 
+plotout = os.path.join(os.path.dirname(fp_img), 'plots', 'Fucus_to_pred_proba_WV-2.png')
+plt.savefig(plotout, dpi=150, format='PNG')
+plt.show()
+
+
+#%%
+# get point stratifiedKFold indices
+train_ind = dict()
+test_ind = dict()
+test_ids = [] # list for all ids
+test_df = pd.DataFrame(columns=['SAV', 'Fucus', 'Sand', 'Sparse', 'Deep', 'sykeid'])
+
+skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
+for i, (train_index, test_index) in enumerate(skf.split(X_gdf,y_gdf)):
+    fold = 'fold_' + str(i+1)
+    #train_ind[fold] = train_index.tolist()
+    #test_ind[fold] = test_index.tolist()
+    
+    # sanity check
+#    fold_pts_test = X_gdf.iloc[test_index]
+#    pts_out = os.path.join(os.path.dirname(fp_gt), 'fold_pts.gpkg')
+#    fold_pts_test.to_file(pts_out, driver='GPKG', layer=fold)
+    # select train and test rows
+    train_ind[fold] = X_gdf['sykeid'][X_gdf.index2.isin(train_index)].tolist()
+    test_ind[fold] = X_gdf['sykeid'][~X_gdf.index2.isin(train_index)].tolist()
+    
+    X_train_fold = X_gdf[X_gdf.index2.isin(train_index)]
+    y_train_fold = y_gdf[X_gdf.index2.isin(train_index)]
+    X_test_fold = X_gdf[~X_gdf.index2.isin(train_index)]
+    y_test_fold = y_gdf[~X_gdf.index2.isin(train_index)]
+    
+    # drop cols
+    X_train_fold = X_train_fold.drop(['geometry', 'sykeid', 'segment_ids', 'index2'], axis=1)
+    X_test_fold = X_test_fold.drop(['geometry', 'sykeid', 'segment_ids', 'index2'], axis=1)
+    # normalize
+    X_train_fold = normalize(X_train_fold)
+    X_test_fold = normalize(X_test_fold)
+    
+    # random forest classifier
+    rf = RandomForestClassifier(n_estimators=150, max_depth=None, n_jobs=5) # ,max_features='sqrt',
+                              #  bootstrap=True, oob_score=True,
+                              #  random_state=42)
+    rf.fit(X_train_fold, y_train_fold)
+    rf.score(X_test_fold, y_test_fold)
+    pred = rf.predict_proba(X_test_fold)
+    # to df
+    pred_df = pd.DataFrame(pred, columns=['SAV', 'Fucus', 'Sand', 'Sparse', 'Deep'])    
+    # add sykeid column
+    pred_df['sykeid'] = test_ind[fold]
+    # concat
+    test_df = pd.concat([test_df, pred_df])   
+
+    # sykeid's to list
+    test_ids.append(X_gdf['sykeid'][~X_gdf.index2.isin(train_index)].tolist())
+ #   train_ind.append(train_index.tolist())
+ #   test_ind.append(test_index.tolist())
+    print(f"Fold {i}:")
+    print(f"  Train: index={train_index}")
+    print(f"  Test:  index={test_index}")
+# test uniqueness of test folds
+set(test_ind['fold_1']).intersection(test_ind['fold_3'])
+# extract list of lists
+test_ids = [i for j in test_ids for i in j]
+
+# change column type
+test_df['sykeid'] = test_df['sykeid'].astype(int)
+gdf['sykeid'] = gdf['sykeid'].astype(int)
+
+# join observed coverage
+test_df = test_df.merge(gdf[['sykeid', 'fucaceae_cov']], left_on='sykeid', right_on='sykeid')
+# correlation
+from scipy.stats import pearsonr
+corr, _ = pearsonr(test_df.fucaceae_cov, test_df.Fucus)
+print('Pearsons correlation: %.3f' % (corr))
+
+# plot predicted probability and observed coverage
+fig, ax = plt.subplots()
+ax.scatter(test_df.fucaceae_cov, test_df.Fucus, s=0.7)
+ax.text(0, 0.9, 'Pearsons correlation: %.3f' % (corr))
+p1, p0 = np.polyfit(test_df.fucaceae_cov, test_df.Fucus, deg=1)
+ax.axline(xy1=(0, p0), slope=p1, lw=0.5, color='black', alpha=0.7)
+ax.grid(alpha=0.5)
+plt.title('Fucus cover to predicted probability WV-2')
+plt.tight_layout()
+# save 
+plotout = os.path.join(os.path.dirname(fp_img), 'plots', 'Fucus_to_pred_proba_WV-2.png')
+plt.savefig(plotout, dpi=150, format='PNG')
+plt.show()
+
+# save
+import json
+test_ind_outdir = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs'
+test_ind_out = os.path.join(test_ind_outdir, 'test_manualedit_3011__VHRstratifiedKFold.json')
+if os.path.isdir(test_ind_outdir) == False:
+    os.mkdir(test_ind_out)
+with open(test_ind_out, 'w') as fp_out:
+    json.dump(test_ind, fp_out, indent=4)
+# save df
+test_df_out = test_df[['Fucus', 'sykeid', 'fucaceae_cov']]
+test_df_out = test_df_out.rename({'Fucus': 'fucus_predproba', 'fucaceae_cov': 'fucus_cover'}, axis=1)
+df_out = os.path.join(test_ind_outdir, 'VHR_test_predictions.csv')
+test_df_out.to_csv(df_out, sep=';')
+
+# drop columns
+X_gdf_train = X_gdf.drop(['geometry', 'sykeid', 'segment_ids', 'index2'], axis=1)
+# CV
+n_scores = cross_val_score(rf, X_gdf_train, y_gdf, cv=skf, scoring='accuracy')
+print('n=',str(n), '%.3f (%.3f)' % (np.mean(n_scores), np.std(n_scores)))
+# CV predictions
+cv_pred = cross_val_predict(rf, X_gdf_train, y_gdf, cv=skf, n_jobs=10, method='predict_proba')
+# to dataframe
+df_cv_pred = pd.DataFrame(cv_pred, columns=['SAV', 'Fucus', 'Sand', 'Sparse', 'Deep'])
+df_cv_pred['sykeid'] = test_ids
+# convert column to int
+df_cv_pred['sykeid'] = df_cv_pred['sykeid'].astype(int)
+gdf['sykeid'] = gdf['sykeid'].astype(int)
+# join field observations
+df_cv_pred = df_cv_pred.merge(gdf[['sykeid', 'fucaceae_cov']], left_on='sykeid', right_on='sykeid')
+
+
+
+# train test pts to arrays
+X_gdf_train_arr = np.array(X_gdf_train)
+y_gdf_arr = np.array(y_gdf)
+# normalize 
+X_gdf_train_arr = normalize(X_gdf_train_arr, axis=1)
+# train test split
+X_train, X_test, y_train, y_test = train_test_split(X_gdf_train_arr, y_gdf_arr,
+                                                    test_size=0.3,
+                                                    random_state=42, shuffle=True,
+                                                    stratify=y_gdf_arr)
+# fit rf
+rf.fit(X_train, y_train)
+rf.score(X_test, y_test)
+
+# predict test
+predf = pd.DataFrame()
+#predf['truth'] = y_test
+predf['predict'] = rf.predict(X_test)
+# classification report
+print(metrics.classification_report(y_test, predf.predict))
+
+
+
+# set gdf_train index
+gdf_test = gdf_train.set_index('index2')
+# merge sykeid and classes
+df_cv_pred = df_cv_pred.join(gdf_test[['new_class', 'geometry']], on='fold_index', how='left')
+
+
+# save
+df_out = os.path.join(os.path.dirname(fp_gt), 'cv_10fold_pred.csv')
+df_cv_pred.to_csv(df_out, sep=';', columns=df_cv_pred.columns)
+
+#%%
+from sklearn.neural_network import MLPClassifier
+# point stratifiedKFold and check that no other points within the same segment 
+train_seg_ind = dict()
+test_seg_ind = dict()
+test_seg_indices = []
+fold_preds = []
+fold_segs = []
+
+# train test data
+X_gdf_ind = gdf_train.drop(['new_class', 'sykeid'], axis=1)
+y_gdf_ind = gdf_train[['gt_sampled', 'index2']]
+
+
+skf = StratifiedKFold(n_splits=10)#, shuffle=True, random_state=42)
+for i, (train_index, test_index) in enumerate(skf.split(X_gdf_ind, y_gdf_ind.gt_sampled)):
+    # select train and test rows
+    train_fold = X_gdf_ind[X_gdf_ind.index2.isin(train_index)]
+    test_fold = X_gdf_ind[~X_gdf_ind.index2.isin(train_index)] # is not in train index
+    
+    # list of segments which in test and train
+    test_ids = sorted(set(test_fold.segment_ids).intersection(train_fold.segment_ids))
+    # exclude test fold segment ids from train 
+    train_fold = train_fold[~train_fold.segment_ids.isin(test_ids)]
+    
+    # keep only rows with majority class in test
+    
+    # drop duplicates
+    #test_fold = test_fold[test_fold.duplicated('segment_ids') == False]
+    print(np.unique(test_fold.gt_sampled, return_counts=True))
+   # break
+    fold = 'fold_' + str(i+1)
+    #train_seg_ind[fold] = train_fold.sykeid.tolist()
+    #test_seg_ind[fold] = test_fold.sykeid.tolist()
+#    test_indices.append(test_index.tolist())
+#    train_ind.append(train_index.tolist())
+ #   test_ind.append(test_index.tolist())
+#    print(f"Fold {i}:")
+#    print(f"  Train: index={train_index}")
+#    print(f"  Test:  index={test_index}")
+    ########
+    fold_y = np.zeros(shape=segments.shape).astype('uint32')
+    fold_X = np.zeros(shape=segments.shape).astype('uint32')
+    X_indices = []
+    y_indices = []
+    # get test, train segments
+    start = time.time()
+    #for seg_id in test_fold.segment_ids:
+    #    fold_y = np.where(segments == seg_id, segments, fold_y) 
+    for seg_id in train_fold.segment_ids:
+        fold_X = np.where(segments == seg_id, segments, fold_X) 
+    end = time.time()
+    print('Selecting', fold, 'fold segments took %.2f' % (end-start), 'seconds' )
+    #print(np.unique(fold_test)) 
+    
+    # sanity check, save fold
+ #   foldmeta = upmeta.copy()
+ #   fold_out = os.path.join(segdir, 'fold_1_test.tif')    
+ #   with rio.open(fold_out, 'w', **foldmeta, compress='LZW') as dst:
+ #       dst.write(fold_y.astype(foldmeta['dtype']))
+    
+    # get points for testing
+    fold_gdf_test = X_gdf_ind[~X_gdf_ind.segment_ids.isin(np.unique(fold_X.tolist()))]
+    set(fold_gdf_test.segment_ids).intersection(np.unique(fold_X.tolist()))
+    # sanity check, save test pts
+    pts_out = os.path.join(os.path.dirname(fp_gt), 'fold_pts.gpkg')
+    fold_gdf_test.to_file(pts_out, driver='GPKG', layer=fold)    
+
+    # select stack columns
+    fold_gdf_test_X = fold_gdf_test[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'tgi', 'gcc', 'eg', 'bg', 'gr', 'gbi', 'depth', 'pca1', 'pca2', 'pca3']]    
+    fold_gdf_test_y = fold_gdf_test[['gt_sampled']]    
+    # convert to array
+    fold_array_test_X = np.array(fold_gdf_test_X)
+    fold_array_test_y = np.array(fold_gdf_test_y).reshape(-1)
+    # normalize
+    fold_array_test_X = normalize(fold_array_test_X, axis=1)
+    
+    # reshape and get data where nonzero
+#    fold_y_re = fold_y.reshape(-1)
+#    fold_gt = gt[fold_y_re >0]
+#    fold_y_indices = np.argwhere(fold_y_re)
+ #   y_indices.append(fold_y_indices)
+    # segment ids of test fold
+#    fold_segments = segments.reshape(-1)[fold_y_indices]
+    
+    fold_X_re = fold_X.reshape(-1)
+    fold_X_indices = np.argwhere(fold_X_re)
+    X_indices.append(fold_X_indices)    
+    # select pixels from stack/ground truth
+    fold_X_train = stack_re_n[fold_X_re > 0]
+    fold_y_train = gt[fold_X_re > 0]
+#    fold_X_test = stack_re_n[fold_y_re > 0]
+#    fold_y_test = gt[fold_y_re > 0]
+    
+    # drop 0's
+    fold_X_train = fold_X_train[fold_y_train > 0]
+    fold_y_train = fold_y_train[fold_y_train > 0]
+#    fold_X_test = fold_X_test[fold_y_test > 0]
+#    fold_y_test = fold_y_test[fold_y_test > 0]
+    
+    # random forest classifier
+    rf = RandomForestClassifier(n_estimators=150, max_depth=None, n_jobs=5 ,max_features='sqrt',
+                                bootstrap=True, oob_score=True,
+                                random_state=42)
+  #  mlp = MLPClassifier(activation='relu', solver='adam', max_iter=5000, random_state=42)
+
+    # fit 
+    rf.fit(fold_X_train, fold_y_train)
+  #  mlp.fit(fold_X_train, fold_y_train)
+    rf.score(fold_array_test_X, fold_array_test_y)
+  #  mlp.score(fold_X_test, fold_y_test)
+    
+    print(metrics.classification_report(fold_array_test_y, rf.predict(fold_array_test_X)))
+
+    # predict
+    fold_pred = rf.predict_proba(fold_array_test_X)
+
+    fold_segs.append(fold_gdf_test.index2)
+    fold_preds.append(fold_pred[:,1])
+
+
+# concat array
+fold_test_result = np.concatenate(fold_preds, axis=0)
+fold_segs = np.concatenate(fold_segs, axis=0)
+
+
+test_df = pd.DataFrame(np.concatenate(fold_preds, axis=0), columns=['proba'])
+test_df['index2'] = fold_segs#np.concatenate(fold_segs, axis=0)    
+
+
+########
+fold_test = np.zeros(shape=segments.shape).astype('uint32')
+fold_train = np.zeros(shape=segments.shape).astype('uint32')
+X_indices = []
+y_indices = []
+# create iterable arrays of indices based on folds
+for f in test_ind.keys():
+    test_indices = test_ind.get(f)
+    train_indices = train_ind.get(f)
+#    break
+    # get segment ids by fold indices
+    test_segments = gdf.segment_ids.iloc[test_indices]
+#    train_segments = gdf.loc[gdf.index.difference(test_indices), 'segment_ids']
+    # or 
+    train_segments = gdf.segment_ids.iloc[train_indices]
+    # get test, train segments
+    for seg_id in test_segments:
+        fold_test = np.where(segments == seg_id, segments, fold_test) 
+    for seg_id in train_segments:
+        fold_train = np.where(segments == seg_id, segments, fold_train) 
+    #print(np.unique(fold_test)) 
+    
+    # reshape and get indices where nonzero
+    fold_test_re = fold_test.reshape(-1)
+    fold_test_indices = np.argwhere(fold_test_re)
+    y_indices.append(fold_test_indices)
+    
+    fold_train_re = fold_train.reshape(-1)
+    fold_train_indices = np.argwhere(fold_train_re)
+    X_indices.append(fold_train_indices)    
+    
+#######################
+# train test split
+X_train, X_test, y_train, y_test = train_test_split(X, y,
+                                                    test_size=0.3,
+                                                    random_state=42, shuffle=True,
+                                                    stratify=y)
+# fit rf
+rf.fit(X_train, y_train)
+rf.score(X_test, y_test)
+
+# predict test
+predf = pd.DataFrame()
+#predf['truth'] = y_test
+predf['predict'] = rf.predict(X_test)
+# classification report
+print(metrics.classification_report(y_test, predf.predict))
+
+#######################################
+# predict for the full image
+#stack_re = np.where(np.isnan(stack_re), 0, stack_re) # replace nans
+preds = [] # list for split array predictions
+# find largest number within range for modulo 0
+modulos = []
+for i in np.arange(32,1024,2):
+    if len(stack_re) % i == 0:
+        modulos.append(i)
+patch_size = np.max(modulos)        
+
+# split for prediction
+split_array = np.split(stack_re_n, patch_size, axis=0)
+j = 0
+for i in split_array: # NOTE: parallelize
+    prediction = rf.predict(i)
+#    prediction = rf.predict_proba(i)
+    preds.append(prediction)
+    print(str(j),'/',str(len(split_array)))
+    j += 1
+
+# predictions to single array
+predicted = np.stack(preds)
+predicted = predicted.reshape(stack_re.shape[0]) 
+# prediction back to 2D array
+predicted = predicted.reshape(1, meta['height'], meta['width'])
+
+
+# mask nodata
+predicted = np.where(nodatamask == True, 0, predicted)
+
+# outfile
+outdir = os.path.join(os.path.dirname(fp_img), 'classification')
+if os.path.isdir(outdir) == False:
+    os.mkdir(outdir)
+outfile = os.path.join(outdir, os.path.basename(fp_img).split('.')[0] + '_segmpix_multiclass_vis_bandratios_ind_pca_RFclassification_manualedit_pts_train_sav_brgralg.tif')
+# update metadata
+upmeta = meta.copy()
+upmeta.update(dtype='uint8',
+              nodata=0,
+              count=1)
+
+with rio.open(outfile, 'w', **upmeta, compress='LZW') as dst:
+    dst.write(predicted.astype(rio.uint8))
+
+
+
+#################################
+# predict probabilities
+j = 0
+pred_probs = [] 
+for i in split_array: # NOTE: parallelize
+    prediction_prob = rf.predict_proba(i)
+#    prediction = rf.predict_proba(i)
+    pred_probs.append(prediction_prob)
+    print(str(j),'/',str(len(split_array)))
+    j += 1
+# predictions to single array
+pred_prob = np.stack(pred_probs)
+n_classes = len(np.unique(y))
+pred_prob = pred_prob.reshape(stack_re.shape[0],n_classes) 
+# prediction back to 2D array
+predicted_proba = pred_prob.reshape(meta['height'], meta['width'], n_classes)
+# transpose
+predicted_proba = predicted_proba.transpose((2,0,1))
+# mask nodata
+predicted_proba = np.where(nodatamask == True, np.nan, predicted_proba)
+# select 1 layer (brown algae)
+proba_out = predicted_proba
+#proba_out = np.expand_dims(proba_out, axis=0)
+# outfile
+outfile = os.path.join(outdir, os.path.basename(fp_img).split('.')[0] + '_segmpix_multiclass_vis_pca_RFclassification_manualedited_ptstrain_brownalgae_proba.tif')
+# update metadata
+probameta = meta.copy()
+probameta.update(dtype=proba_out.dtype.name,
+              nodata=np.nan,
+              count=n_classes)
+
+with rio.open(outfile, 'w', **probameta, compress='LZW') as dst:
+    dst.write(proba_out.astype(probameta['dtype']))
+
+
+    
+
+#######################################
+# Multi layer perceptron
+
+from keras.models import Sequential
+from keras.layers import Flatten, Dense, BatchNormalization
+
+model = Sequential()
+model.add(Dense(32, activation='relu'))
+model.add(BatchNormalization())
+model.add(Dense(1))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
