@@ -137,12 +137,14 @@ df_b = df #backup when testing
 # define classes, 1-dense mixed 3-sparse sav 4-very sparse or no sav 5-deep water
 for idx, row in df.iterrows():
     if ((row.field_depth > 3) & (row.subs_highest != 'hiekka')):
-        df['new_class'].loc[idx] = 5 # deep water
+        df['new_class'].loc[idx] = 5 # deep water other than sand substrate
+    elif (row.field_depth > 5):
+        df['new_class'].loc[idx] = 5 # deep water 
     elif ((row.savcov >= 30) & (row.fucus_from_total < 30)):# & (row.field_depth <= 3)):
         df['new_class'].loc[idx] = 1 # mixed sav
     elif ((row.savcov >= 30) & (row.fucus_from_total >= 30) & (row.field_depth <= 3)):
         df['new_class'].loc[idx] = 2 # fucus dominating
-    elif ((row.savcov < 30) & (row.subs_highest == 'hiekka') & (row.field_depth < 5)): # & (row.subs_high_val < 90)):
+    elif ((row.savcov < 30) & (row.subs_highest == 'hiekka') & (row.field_depth < 5)):
         df['new_class'].loc[idx] = 3 # sandy substrate
     elif (row.savcov < 30):# & (row.field_depth <= 4):
         df['new_class'].loc[idx] = 4 # other substrate sparse or bare
