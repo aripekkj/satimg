@@ -27,7 +27,7 @@ from skimage.segmentation import felzenszwalb
 from rasterstats import zonal_stats
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
-from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.model_selection import cross_val_score, StratifiedKFold, KFold
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
     
 def computePCA(img):
@@ -45,7 +45,9 @@ def computePCA(img):
     # sklearn PCA
     from sklearn.decomposition import PCA
     pca = PCA()
-    pca.fit(test)    
+    pca.fit(test)  
+    # cumulative variance
+    var_cumu = np.cumsum(pca.explained_variance_ratio_)*100
     # apply pca
     pca_out = pca.transform(flat_data)
     # reshape 
@@ -53,16 +55,14 @@ def computePCA(img):
     pca_out = np.transpose(pca_out, (2,0,1))
     # select pc's that explain 99% of variation
     #pca_out = pca_out[0:3,:,:]
-    return pca_out    
+    return pca_out, var_cumu    
 
 
-#fp_img = '/mnt/d/users/e1008409/MK/S2/ac/S2A_MSIL1C_20160913T100022_N0204_R122_T34VEP_20160913T100023/S2A_MSI_2016_09_13_10_00_23_T34VEP_L2W_RrsB2B3B4B8_clip.tif'
-fp_img = '/mnt/d/users/e1008409/MK/S2/c2rcc/subset_L1C_T34VEP_A006411_20160913T100023_s2resampled_10_C2RCC_Rrs_clip_median3x3_filt.tif'
+fp_img = '/mnt/d/users/e1008409/MK/S2/ac/S2A_L2W_20180715_T34VENVEP_merge/S2A_MSI_2018_07_15_10_03_43_T34VENVEP_L2W_RrsB1B2B3B4B5B6B7B8B8A_south.tif'
+#fp_img = '/mnt/d/users/e1008409/MK/S2/ac/S2A_MSIL1C_20160913T100022_N0204_R122_T34VEP_20160913T100023_new/S2A_MSI_2016_09_13_10_00_23_T34VEP_L2W_RrsB1B2B3B4B5B8_WV2extent.tif'
+#fp_img = '/mnt/d/users/e1008409/MK/S2/c2rcc/subset_L1C_T34VEP_A006411_20160913T100023_s2resampled_10_C2RCC_Rrs_clip_median3x3_filt_masked_WV2extent.tif'
 #fp_pt_indices = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/test_stratifiedKFold_indices.json'
-fp_depth = '/mnt/d/users/e1008409/MK/syvyysmalli/depth_20210126_10m_32634_T34VEP.tif'
-fp_img = '/mnt/d/users/e1008409/MK/worldview/pori/ac/WorldView2_2014_09_08_10_36_23_L2W_Rrs_clip_median3x3_filt.tif'
-fp_depth = '/mnt/d/users/e1008409/MK/syvyysmalli/depth_20210126_clipped_transformed_pori_bilinear2m_32634.tif'
-fp_sdb = '/mnt/d/users/e1008409/MK/worldview/pori/ac/sdb/WorldView2_2014_09_08_10_36_23_L2W_Rrs_clip_median3x3_filt_deglint_ndvi_watermask_RFRegressor_SDB_allpts_gryrtgidii.tif'
+fp_depth = '/mnt/d/users/e1008409/MK/syvyysmalli/depth_20210126_clipped_transformed_32634_selkameri_south_.tif'#poriWV2.tif #T34VEP
 
 
 # read
@@ -73,35 +73,27 @@ with rio.open(fp_img) as src:
 with rio.open(fp_depth) as src:
     depth = src.read()
     dmeta = src.meta
-with rio.open(fp_sdb) as src:
-    sdb = src.read()
-    sdbmeta = src.meta
-sdb = sdb * (-1)
-# masked sdb
-sdb_m = np.where((sdb > -4) & (depth > -4) & ((np.abs(sdb) - np.abs(depth)) < 1), sdb, depth)
-sdb_m = np.where(sdb_m == dmeta['nodata'], np.nan, sdb_m)
-# save
-sdb_out = os.path.join(os.path.dirname(fp_sdb), 'RFRegressor_SDB_depth_combined.tif')
-with rio.open(sdb_out, 'w', **sdbmeta, compress='LZW') as dst:
-    dst.write(sdb_m.astype(sdbmeta['dtype']))
+# change nodata
+img = np.where(img == meta['nodata'], np.nan, img)
+meta.update(nodata=np.nan)
+depth = np.where(depth == dmeta['nodata'], np.nan, depth)
+dmeta.update(nodata=np.nan) #update metadata
+# mask any negative pixel in all bands
+img[:, np.any(img <= 0, axis=0)] == meta['nodata']
+# mask img negative pixels from depth
+#depth = np.where(img < 0, np.nan, depth)
 
-depth = sdb_m
-
-# change depth meta
-depth = np.where(depth == dmeta['nodata'], 0, depth)
-
-# mask deepest 
-img = np.where(depth < -5, meta['nodata'], img)
+# mask deep areas or where depth nan 
+img = np.where((depth < -5) | (np.isnan(depth)), np.nan, img)
 # convert depth to abs values
 depth = np.abs(depth)
 
-# compute ndvi, ndti
-#ndvi = normalizedDifference(img, (3,2))
+# compute normalized difference
+ndvi = normalizedDifference(img, (7,3))
+#ndti = normalizedDifference(img, (4,2)) # red-edge/green
 # mask image 
-#img = np.where(ndvi > 0, meta['nodata'], img)
-img = np.where(img[2] < 0.001, meta['nodata'], img) # green band value
-
-img2 = np.where((img[4] > 0.0015) & (depth > 0.5), meta['nodata'], img)
+img = np.where(ndvi > 0, meta['nodata'], img)
+#img = np.where((ndti < 0) & (ndti > -0.3), meta['nodata'], img) 
 
 # nodata mask
 if meta['nodata'] == None:
@@ -111,20 +103,17 @@ elif np.isnan(meta['nodata']):
 else:
     nodatamask = np.where(img[0] == meta['nodata'], True, False)
 
-# define nodata
-#meta.update(nodata=0)
-
 # save masked image
-img_out = fp_img.split('.tif')[0] + '_masked_re.tif'
-with rio.open(img_out, 'w', **meta) as dst:
-    dst.write(img2.astype(meta['dtype']))
+img_out = fp_img.split('.tif')[0] + 'depth_nd_masked.tif'
+with rio.open(img_out, 'w', **meta, compress='LZW') as dst:
+    dst.write(img.astype(meta['dtype']))
 
 #####################
 # 2. segment image
 # set some parameters
-n = 3
+n = 5
 sig = 0.001
-s = 0.0010
+s = 0.050
 
 # segmentation algorithms
 start = time.time()
@@ -155,15 +144,16 @@ upmeta.update(
     nodata = 0,
     count = 1)
 # save
-with rio.open(segfile, 'w', **upmeta) as dst:
+with rio.open(segfile, 'w', **upmeta, compress='LZW') as dst:
     dst.write(segments.astype(upmeta['dtype']))
 # read segments image
 with rio.open(segfile) as src:
     segments = src.read()
 
 # compute pca
-pca = computePCA(img)
+pca, varcumu = computePCA(img)
 pca = np.where(nodatamask == True, np.nan, pca)
+print(varcumu) # print cumulative variance explained
 
 # save pca
 pcadir = os.path.join(os.path.dirname(fp_img), 'pca')
@@ -175,37 +165,35 @@ pcameta.update(count=pca.shape[0])
 with rio.open(pcaout, 'w', **pcameta, compress='LZW') as dst:
     dst.write(pca.astype(pcameta['dtype']))
 # compute indices
-gbi = normalizedDifference(img, (2,1))
-eg = EG(img, (1,2,4))
-gcc = GCC(img, (1,2,4))
-tgi = TGI(img, [1,2,4], 'WV-2')
-#ndvi = normalizedDifference(img, (3,2))
+#gbi = normalizedDifference(img, (1,0))
+eg = EG(img, (1,2,3))
+#gcc = GCC(img, (0,1,2))
+#tgi = TGI(img, [0,1,2], 'S2A')
+#ndvi = normalizedDifference(img, (7,3))
 #ndti = normalizedDifference(img, (2,1))
 # band ratios
 bg = img[1]/img[2]
-gr = img[2]/img[4]
+gr = img[2]/img[3]
 bg = np.expand_dims(bg, axis=0)
 gr = np.expand_dims(gr, axis=0)
-gbi = np.expand_dims(gbi, axis=0)
+eg = np.expand_dims(eg, axis=0)
+#gbi = np.expand_dims(gbi, axis=0)
+ndvi = np.expand_dims(ndvi, axis=0)
+
 # stack to image
 img = img.transpose(1,2,0)
-#ndvi = ndvi.reshape(1, ndvi.shape[0], ndvi.shape[1])
-#ndti = ndti.reshape(1, ndti.shape[0], ndti.shape[1])
-tgi = tgi.reshape(1, tgi.shape[0], tgi.shape[1])
-gcc = gcc.reshape(1, gcc.shape[0], gcc.shape[1])
-eg = eg.reshape(1, eg.shape[0], eg.shape[1])
 
-#ndvi = ndvi.transpose(1,2,0)
 #ndti = ndti.transpose(1,2,0)
-tgi = tgi.transpose(1,2,0)
-gcc = gcc.transpose(1,2,0)
+#tgi = tgi.transpose(1,2,0)
+#gcc = gcc.transpose(1,2,0)
 eg = eg.transpose(1,2,0)
 bg = bg.transpose(1,2,0)
 gr = gr.transpose(1,2,0)
-gbi = gbi.transpose(1,2,0)
+#gbi = gbi.transpose(1,2,0)
+ndvi = ndvi.transpose(1,2,0)
 depth = depth.transpose(1,2,0)
 pca = pca.transpose(1,2,0)
-stack = np.dstack((img, tgi, gcc, eg, bg, gr, gbi, depth, pca[:,:,0:3]))
+stack = np.dstack((img, eg, bg, gr, ndvi, depth, pca))
 
 img = np.transpose(img, (2,0,1))
 # save stack
@@ -225,13 +213,20 @@ with rio.open(stack_out) as src:
     stack = src.read()
 
 # read ground truth and skf indices
-fp_gt = '/mnt/d/users/e1008409/MK/Velmu-aineisto/velmudata_07112022_T34VEP_3067_sav_fucus_sand_bare_classes_selcolumns.gpkg'
+fp_gt = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/velmudata_07112022_selkameri_south_bounds.gpkg'
 #fp_ind = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/test_stratifiedKFold_indices.json'
 
 #import json
-gdf = gpd.read_file(fp_gt)
+gdf = gpd.read_file(fp_gt, engine='pyogrio')
 #with open(fp_ind) as f:
 #    gdf_ind = json.load(f)
+print(len(gdf[(gdf.fucaceae_cov >= 30) & (gdf.field_depth < 2)]))
+# plot histgram of months
+gdf.pvm = pd.to_datetime(gdf.pvm)
+gdf.pvm.groupby([gdf.pvm.dt.year, gdf.pvm.dt.month]).count().plot(kind='bar') #plot
+
+# select pts by date
+gdf = gdf[(gdf.year >= 2010) & (gdf.year <= 2022)]
 
 # check crs
 src = rio.open(fp_img)
@@ -268,15 +263,15 @@ gdf['img_stack'] = [x for x in src.sample(coords)]
 # close dataset
 src.close()
 # extract list
-stack_list = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7',
-              'tgi', 'gcc', 'eg', 'bg', 'gr', 'gbi', 'depth', 'pca1', 'pca2', 'pca3'] #'Band5', 'Band6', 'Band7', 'Band8a'
+stack_list = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band8a',
+              'eg', 'bg', 'gr', 'ndvi', 'depth', 'pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7', 'pca8', 'pca9'] #'Band5', 'Band6', 'Band7', 'Band8a'
 gdf[stack_list] = gpd.GeoDataFrame(gdf.img_stack.tolist(), index=gdf.index)
 # select columns
 stack_list.append('new_class')
-stack_list.append('segment_ids')
+stack_list.append('field_depth')
 stack_list.append('sykeid')
 stack_list.append('geometry')
-stack_list.append('fucaceae_cov')
+#stack_list.append('fucaceae_cov')
 # drop
 gdf = gdf[gdf.segment_ids != 0] # exclude 0 (nodata)
 
@@ -287,7 +282,7 @@ gdf_train = gdf_train.dropna()
 gdf_train['index2'] = range(0, len(gdf_train), 1)
 
 # save
-gdf_train_out = os.path.join(os.path.dirname(fp_gt), 'gdf_train_VHR.gpkg')
+gdf_train_out = os.path.join(os.path.dirname(fp_gt), 'gdf_train_S2.gpkg')
 gdf_train.to_file(gdf_train_out, driver='GPKG')
 ##############
 # use below for segment based classification
@@ -351,13 +346,22 @@ stack_re = np.where(np.isnan(stack_re), 0, stack_re)
 # save gt
 gtout = gt.reshape((1,meta['height'], meta['width']))
 #gtout = np.where(gtout == 3, 5, gtout)
-gt_out = os.path.join(segdir, 'n' + str(n) + 'wv_gt_edit.tif')
+gt_out = os.path.join(segdir, 'n' + str(n) + 's2_gt.tif')
 with rio.open(gt_out, 'w', **upmeta) as dst:
     dst.write(gtout.astype(rio.uint32))
 
 # sample gt segments
 # get point coords
-coords = [(x,y) for x,y in zip(gdf_train.geometry.x, gdf_train.geometry.y)]
+
+if gdf_train.geometry.geom_type.str.contains('MultiPoint').any() == True:
+    sp = gdf_train.geometry.explode()
+    # get point coords
+    coords = [(x,y) for x,y in zip(sp.x, sp.y)]
+else:
+    # get point coords
+    coords = [(x,y) for x,y in zip(gdf_train.geometry.x, gdf_train.geometry.y)]
+
+#coords = [(x,y) for x,y in zip(gdf_train.geometry.x, gdf_train.geometry.y)]
 src = rio.open(gt_out)
 gdf_train['gt_sampled'] = [x for x in src.sample(coords)]
 # close dataset
@@ -367,6 +371,147 @@ gdf_train['gt_sampled'] = gpd.GeoDataFrame(gdf_train.gt_sampled.tolist(), index=
 # drop 0's
 gdf_train = gdf_train[gdf_train.gt_sampled != 0]
 #gdf_train = gdf_train[gdf_train.gt_sampled != 5]
+
+
+###################################
+# Plot bands and classes
+#gdf_train.new_class = np.where(gdf_train.new_class == 3, 5, gdf_train.new_class)
+#gdf_train.new_class = np.where(gdf_train.new_class == 7, 1, gdf_train.new_class)
+
+# group by class and compute average spectra
+# select cols
+df_s = gdf_train[['new_class', 'Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band8a']]
+# groupby class
+dg = df_s.groupby('new_class').mean()
+# select band columns
+#dg = dg[cols]
+
+
+#%%
+# ------------------------------------------------ #
+# 1. create spectral plot. Average of all points
+fig, ax = plt.subplots()
+
+ax.plot(dg.loc[1], color='green', label='Mixed SAV')
+ax.plot(dg.loc[2], color='#A27C1F', label='Brown algae')
+ax.plot(dg.loc[3], color='yellow', label='Sand')
+#ax.plot(dg.loc[4], color='red', label='Red algae')
+ax.plot(dg.loc[4], color='purple', label='Low SAV')
+ax.plot(dg.loc[5], color='blue', label='Deep water')
+#ax.plot(dg.loc[7], color='#FFD7A0', label='Turbid')
+#ax.plot(dg.iloc[4], color='#92E335', label='Vascular')
+ax.set_xticklabels([442.7, 492.4, 559.8, 664.6, 704.1, 740.5, 782.8, 832.8, 864.7]) #442.7, 492.4, 559.8, 664.6, 704.1, 740.5, 782.8, 832.8, 864.7, 945.1, 1373.5, 1613.7, 2202.4
+ax.set_xlabel('Wavelength (nm)')
+ax.set_ylabel('Remote sensing reflectance (Rrs) $sr^{-1}$')
+ax.legend()
+ax.grid(True)
+ax.set_title('Average spectra per class, S2')
+
+plt.tight_layout()
+# save 
+plotout = os.path.join(os.path.dirname(fp_img), 'plots', 'Spectra_per_class_S2_VENVEP_acolite.png')
+plt.savefig(plotout, dpi=150, format='PNG')
+
+# spectral plot by depth
+dzones = [] 
+n = 0
+while n < 4:
+    dzone = (n, n+1)
+    dzones.append(dzone)
+    n += 1
+
+bands = gdf_train.columns[:8].tolist()
+# deep water class
+dw = df_s[df_s['new_class'] == 7].groupby('new_class').mean()
+dw = dw[cols[:-1]]
+
+# create spectral plot of each depth zone
+fig, ax = plt.subplots(2,2, figsize=(12,8))
+
+for i in dzones:
+    # make selection
+    dfsel = gdf_train[(gdf_train.depth > i[0]) & (gdf_train.depth <= i[1])]
+    # drop class 4
+    #dfsel = dfsel[dfsel.classes < 4]
+    # group
+    dfsel_group = dfsel.groupby('new_class').mean(numeric_only=True)    
+    # drop 0
+    if 0 in dfsel_group.index:
+        dfsel_group = dfsel_group.drop(0)
+    # select band columns
+    dfsel_group = dfsel_group[bands]
+    # reset index
+    #dfsel_group = dfsel_group.reset_index()
+    
+    # row, col params for multiplot
+    if i[0] < 2:
+        c = 0
+        r = i[0]
+    elif i[0] >= 2:
+        c = 1
+        r = i[0] - 2
+    
+    cl_in_dzone = list(np.unique(dfsel_group.index))
+    print(cl_in_dzone)
+    colors = ['green', '#888f29', 'yellow', 'cyan', 'purple', 'blue', 'pink']
+    labs = ['Mixed SAV', 'Brown algae', 'Sand', 'Bare', 'Sparse SAV', 'Deep water', 'Turbid']
+    
+    for j in cl_in_dzone:
+        # plot
+        ax[r,c].plot(dfsel_group.loc[j], linewidth=0.7, color=colors[j-1], label=labs[j-1])
+    #    ax[r,c].plot(dfsel_group.loc[2], linewidth=0.7, color=, label=)
+    #    ax[r,c].plot(dfsel_group.loc[3], linewidth=0.7, color=, label=)
+  #  ax[r,c].plot(dw.loc[4], linewidth=0.7, linestyle='--', color='#0034CA', label='Deep water') 
+    ax[r,c].set_title(str(i[0]) + '-' + str(i[1]) + ' meters', fontsize=10) 
+    ax[r,c].grid(True, color='#B0B0B0')
+    ax[r,c].set_xticks(list(np.arange(len(bands))))     
+    ax[r,c].set_xticklabels(bands, rotation=75)
+    ax[r,c].tick_params(axis='x', which='major', pad=-1, labelsize=8)
+    ax[r,c].tick_params(axis='y', which='major', pad=-1, labelsize=8)
+    ax[r,c].set_facecolor(color='#D9D9D9')
+"""    
+# select deep water
+dfsel_deep = df[df.field_depth > 5].groupby('new_class').mean(numeric_only=True)
+dfsel_deep = dfsel_deep[cols]
+
+# add to plot
+ax[2,1].plot(dfsel_deep.loc[1], linewidth=0.7, color='#443726', label='Bare bottom or \nsparse SAV')
+ax[2,1].plot(dfsel_deep.loc[2], linewidth=0.7, color='green', label='Mixed SAV')
+ax[2,1].plot(dfsel_deep.loc[3], linewidth=0.7, color='#A27C1F', label='Dense Zostera')
+ax[2,1].plot(dw.loc[4], linewidth=0.7, linestyle='--', color='#0034CA', label='Deep water')    
+ax[2,1].set_title('> 5 meters', fontsize=10)
+ax[2,1].grid(True, color='#B0B0B0')
+ax[2,1].set_xticks(list(np.arange(len(bands))))     
+ax[2,1].set_xticklabels(bands)
+ax[2,1].tick_params(axis='x', which='major', pad=-1, labelsize=8)
+ax[2,1].tick_params(axis='y', which='major', pad=-1, labelsize=8)
+
+ax[2,1].set_facecolor(color='#D9D9D9')
+"""
+# set labels
+plt.setp(ax[-1, :], xlabel='Band')
+plt.setp(ax[1, 0], ylabel='Remote sensing reflectance $(sr^{-1})$')
+plt.suptitle('Average spectra at depths (m)')
+
+
+# legend
+handles, labels = ax[0,0].get_legend_handles_labels()
+lgd = fig.legend(handles, labels, loc='upper right', bbox_to_anchor=(1.15, 0.9))
+plt.tight_layout()
+# save
+plt.savefig(os.path.join(os.path.dirname(fp_img), 'plots', 'Avg_spectra_at_depths.png'), dpi=300, format='PNG', bbox_extra_artists=[lgd, handles, labels])
+
+
+#%%
+
+###################################
+# pts that have exact same sampled values
+gdf_train['duplicate'] = gdf_train.duplicated(subset=['Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band8a'])
+print('Duplicated rows:', len(gdf_train[gdf_train.duplicate==True]))
+# drop duplicates
+gdf_train_d = gdf_train.drop_duplicates(subset=['Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band8a'])
+###################################
+
 
 # Machine learning
 # normalize data
@@ -379,21 +524,247 @@ X = stack_re_n[gt > 0]
 y = gt[gt > 0]
 
 
-#gdf_train.new_class = np.where(gdf_train.new_class == 3, 5, gdf_train.new_class)
 # train test from point data
-X_gdf = gdf_train.drop(['new_class'], axis=1)
+gdf_train = gdf_train[gdf_train.new_class != 0]
+X_gdf = gdf_train.drop(['new_class', 'sykeid', 'geometry', 'depth'], axis=1)
 y_gdf = gdf_train['new_class']
 
 # normalize 
-#X_gdf = normalize(X_gdf)
+X_gdf = normalize(X_gdf)
 
 # random forest classifier
-rf = RandomForestClassifier(n_estimators=150, max_depth=None, n_jobs=5) #, max_features='sqrt',
-                         #   bootstrap=True, oob_score=True,
-                         #   random_state=42)
+rf = RandomForestClassifier(n_estimators=200, max_depth=None, n_jobs=5 , max_features='sqrt',
+                            bootstrap=True, oob_score=True,
+                            random_state=42)
 
+
+
+#%%
+# get point stratifiedKFold indices
+train_ind = dict()
+test_ind = dict()
+test_ids = [] # list for all ids
+test_df = pd.DataFrame(columns=['SAV', 'Fucus', 'Sand', 'Sparse', 'Deep', 'sykeid'])
+
+skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
+for i, (train_index, test_index) in enumerate(skf.split(X_gdf,y_gdf)):
+    fold = 'fold_' + str(i+1)
+    #train_ind[fold] = train_index.tolist()
+    #test_ind[fold] = test_index.tolist()
+    
+    # sanity check
+#    fold_pts_test = X_gdf.iloc[test_index]
+#    pts_out = os.path.join(os.path.dirname(fp_gt), 'fold_pts.gpkg')
+#    fold_pts_test.to_file(pts_out, driver='GPKG', layer=fold)
+    # select train and test rows
+    train_ind[fold] = X_gdf['sykeid'][X_gdf.index2.isin(train_index)].tolist()
+    test_ind[fold] = X_gdf['sykeid'][X_gdf.index2.isin(test_index)].tolist()
+    # test train and test are separate 
+    set(train_ind[fold]).intersection(test_ind[fold])    
+
+    X_train_fold = X_gdf[X_gdf.index2.isin(train_index)]
+    y_train_fold = y_gdf[X_gdf.index2.isin(train_index)]
+    X_test_fold = X_gdf[X_gdf.index2.isin(test_index)]
+    y_test_fold = y_gdf[X_gdf.index2.isin(test_index)]
+    
+    # drop cols
+    X_train_fold = X_train_fold.drop(['geometry', 'sykeid', 'segment_ids', 'index2'], axis=1)
+    X_test_fold = X_test_fold.drop(['geometry', 'sykeid', 'segment_ids', 'index2'], axis=1)
+    # normalize
+    X_train_fold = normalize(X_train_fold)
+    X_test_fold = normalize(X_test_fold)
+    
+    # random forest classifier
+    rf = RandomForestClassifier(n_estimators=150, max_depth=None, n_jobs=5) #,max_features='sqrt',
+                               # bootstrap=True, oob_score=True,
+                               # random_state=42)
+    rf.fit(X_train_fold, y_train_fold)
+    rf.score(X_test_fold, y_test_fold)
+    pred = rf.predict_proba(X_test_fold)
+    # to df
+    pred_df = pd.DataFrame(pred, columns=['SAV', 'Fucus', 'Sand', 'Sparse', 'Deep'])    
+    # add sykeid column
+    pred_df['sykeid'] = test_ind[fold]
+    # concat
+    test_df = pd.concat([test_df, pred_df])   
+
+    # sykeid's to list
+    test_ids.append(X_gdf['sykeid'][X_gdf.index2.isin(test_index)].tolist())
+ #   train_ind.append(train_index.tolist())
+ #   test_ind.append(test_index.tolist())
+    print(f"Fold {i}:")
+    print(f"  Train: index={train_index}")
+    print(f"  Test:  index={test_index}")
+# test uniqueness of test folds
+set(test_ind['fold_1']).intersection(test_ind['fold_3'])
+# extract list of lists
+test_ids = [i for j in test_ids for i in j]
+
+# change column type
+test_df['sykeid'] = test_df['sykeid'].astype(int)
+gdf['sykeid'] = gdf['sykeid'].astype(int)
+
+# join observed coverage
+test_df = test_df.merge(gdf[['sykeid', 'fucaceae_cov', 'field_depth', 'geometry']], left_on='sykeid', right_on='sykeid')
+# presence
+test_pres = test_df[test_df.fucaceae_cov >= 30]
+# correlation
+from scipy.stats import pearsonr
+corr, _ = pearsonr(test_df.fucaceae_cov, test_df.Fucus)
+print('Pearsons correlation: %.3f' % (corr))
+
+# plot predicted probability and observed coverage
+fig, ax = plt.subplots()
+ax.scatter(test_df.fucaceae_cov, test_df.Fucus, s=0.7)
+ax.text(0, test_df.Fucus.max()-0.05, 'Pearsons correlation: %.3f' % (corr))
+p1, p0 = np.polyfit(test_df.fucaceae_cov, test_df.Fucus, deg=1)
+ax.axline(xy1=(0, p0), slope=p1, lw=0.5, color='black', alpha=0.7)
+ax.grid(alpha=0.5)
+ax.set_xlabel('Fucus coverage')
+ax.set_ylabel('Probability')
+plt.title('Stratified K-fold RFClassifier \nFucus cover to predicted probability, S2')
+plt.tight_layout()
+# save 
+plotdir = os.path.join(os.path.dirname(fp_img), 'plots')
+if os.path.isdir(plotdir) == False:
+    os.mkdir(plotdir)
+plotout = os.path.join(plotdir, 'Fucus_to_pred_proba_S2_acolite_VENVEP.png')
+plt.savefig(plotout, dpi=150, format='PNG')
+plt.show()
+
+# plot predicted probability against depth
+fig, ax = plt.subplots()
+ax.scatter(test_pres.field_depth, test_pres.Fucus, s=0.7)
+#p1, p0 = np.polyfit(test_df.fucaceae_cov, test_df.Fucus, deg=1)
+#ax.axline(xy1=(0, p0), slope=p1, lw=0.5, color='black', alpha=0.7)
+ax.grid(alpha=0.5)
+ax.set_xlabel('Depth')
+ax.set_ylabel('Probability')
+plt.title('Stratified K-fold RFClassifier \nFucus cover to depth, S2')
+plt.tight_layout()
+
+# save
+import json
+test_ind_outdir = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs'
+test_ind_out = os.path.join(test_ind_outdir, 'test_VENVEP_stratifiedKFold.json')
+if os.path.isdir(test_ind_outdir) == False:
+    os.mkdir(test_ind_out)
+with open(test_ind_out, 'w') as fp_out:
+    json.dump(test_ind, fp_out, indent=4)
+# save df
+test_df_out = test_df[['Fucus', 'sykeid', 'fucaceae_cov']]
+test_df_out = test_df_out.rename({'Fucus': 'fucus_predproba', 'fucaceae_cov': 'fucus_cover'}, axis=1)
+df_out = os.path.join(test_ind_outdir, 'S2_acolite_VENVEP_test_predictions.csv')
+test_df_out.to_csv(df_out, sep=';')
+
+df_out = os.path.join(test_ind_outdir, 'S2_acolite_WV2ext_test_predictions.gpkg')
+test_gdf = gpd.GeoDataFrame(test_df, geometry=test_df.geometry)
+test_gdf.to_file(df_out, driver='GPKG')
+
+# drop columns
+X_gdf_train = X_gdf.drop(['geometry', 'sykeid', 'segment_ids', 'index2'], axis=1)
+# CV
+n_scores = cross_val_score(rf, X_gdf_train, y_gdf, cv=skf, scoring='accuracy')
+print('n=',str(n), '%.3f (%.3f)' % (np.mean(n_scores), np.std(n_scores)))
+# CV predictions
+cv_pred = cross_val_predict(rf, X_gdf_train, y_gdf, cv=skf, n_jobs=10, method='predict_proba')
+# to dataframe
+df_cv_pred = pd.DataFrame(cv_pred, columns=['SAV', 'Fucus', 'Sand', 'Sparse', 'Deep'])
+df_cv_pred['sykeid'] = test_ids
+# convert column to int
+df_cv_pred['sykeid'] = df_cv_pred['sykeid'].astype(int)
+gdf['sykeid'] = gdf['sykeid'].astype(int)
+# join field observations
+df_cv_pred = df_cv_pred.merge(gdf[['sykeid', 'fucaceae_cov']], left_on='sykeid', right_on='sykeid')
+
+
+
+# train test pts to arrays
+X_gdf_train_arr = np.array(X_gdf)
+y_gdf_arr = np.array(y_gdf)
+# normalize 
+X_gdf_train_arr = normalize(X_gdf_train_arr, axis=1)
+# train test split
+X_train, X_test, y_train, y_test = train_test_split(X_gdf_train_arr, y_gdf_arr,
+                                                    test_size=0.3,
+                                                    random_state=42, shuffle=True,
+                                                    stratify=y_gdf_arr)
+# fit rf
+rf.fit(X_train, y_train)
+rf.score(X_test, y_test)
+
+# predict test
+predf = pd.DataFrame()
+#predf['truth'] = y_test
+predf['predict'] = rf.predict(X_test)
+# classification report
+print(metrics.classification_report(y_test, predf.predict))
+
+
+
+# set gdf_train index
+gdf_test = gdf_train.set_index('index2')
+# merge sykeid and classes
+df_cv_pred = df_cv_pred.join(gdf_test[['new_class', 'geometry']], on='fold_index', how='left')
+
+
+# save
+df_out = os.path.join(os.path.dirname(fp_gt), 'cv_10fold_pred.csv')
+df_cv_pred.to_csv(df_out, sep=';', columns=df_cv_pred.columns)
+#######################################
+# predict for the full image
+stack_re = stack.reshape((stack.shape[0],-1)).transpose((1,0))
+stack_re = np.where(np.isnan(stack_re), 0, stack_re) # replace nans
+
+preds = [] # list for split array predictions
+# find largest number within range for modulo 0
+modulos = []
+for i in np.arange(32,1024,2):
+    if len(stack_re) % i == 0:
+        modulos.append(i)
+patch_size = np.max(modulos)        
+
+# normalize
+stack_re_n = normalize(stack_re, axis=1)
+# split for prediction
+split_array = np.split(stack_re_n, patch_size, axis=0)
+j = 0
+for i in split_array: # NOTE: parallelize
+    prediction = rf.predict(i)
+#    prediction = rf.predict_proba(i)
+    preds.append(prediction)
+    print(str(j),'/',str(len(split_array)))
+    j += 1
+
+# patch predictions back to single array
+predicted = np.stack(preds)
+predicted = predicted.reshape(stack_re.shape[0]) 
+# prediction back to 2D array
+predicted = predicted.reshape(1, meta['height'], meta['width'])
+
+
+# mask nodata
+predicted = np.where(nodatamask == True, 0, predicted)
+
+# outfile
+outdir = os.path.join(os.path.dirname(fp_img), 'classification')
+if os.path.isdir(outdir) == False:
+    os.mkdir(outdir)
+outfile = os.path.join(outdir, os.path.basename(fp_img).split('.')[0] + '__RFclassification_pts.tif')
+# update metadata
+upmeta = meta.copy()
+upmeta.update(dtype='uint8',
+              nodata=0,
+              count=1)
+
+with rio.open(outfile, 'w', **upmeta, compress='LZW') as dst:
+    dst.write(predicted.astype(rio.uint8))
+
+
+
+#%%
 # RFRegressor test
-X_gdf_r = gdf_train.drop(['new_class', 'segment_ids', 'sykeid', 'geometry', 'index2', 'fucaceae_cov'], axis=1)
+X_gdf_r = gdf_train.drop(['new_class', 'segment_ids', 'geometry', 'fucaceae_cov'], axis=1)
 y_gdf_r = gdf_train['fucaceae_cov']
 
 X_train, X_test, y_train, y_test = train_test_split(X_gdf_r, y_gdf_r,
@@ -431,15 +802,14 @@ plt.savefig(plotout, dpi=150, format='PNG')
 plt.show()
 
 
-#%%
-# get point stratifiedKFold indices
+# get point KFold indices
 train_ind = dict()
 test_ind = dict()
 test_ids = [] # list for all ids
-test_df = pd.DataFrame(columns=['SAV', 'Fucus', 'Sand', 'Sparse', 'Deep', 'sykeid'])
+test_df = pd.DataFrame(columns=['pred', 'sykeid'])
 
-skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
-for i, (train_index, test_index) in enumerate(skf.split(X_gdf,y_gdf)):
+kf = KFold(n_splits=10, shuffle=True, random_state=42)
+for i, (train_index, test_index) in enumerate(kf.split(X_gdf_r,y_gdf_r)):
     fold = 'fold_' + str(i+1)
     #train_ind[fold] = train_index.tolist()
     #test_ind[fold] = test_index.tolist()
@@ -449,37 +819,37 @@ for i, (train_index, test_index) in enumerate(skf.split(X_gdf,y_gdf)):
 #    pts_out = os.path.join(os.path.dirname(fp_gt), 'fold_pts.gpkg')
 #    fold_pts_test.to_file(pts_out, driver='GPKG', layer=fold)
     # select train and test rows
-    train_ind[fold] = X_gdf['sykeid'][X_gdf.index2.isin(train_index)].tolist()
-    test_ind[fold] = X_gdf['sykeid'][~X_gdf.index2.isin(train_index)].tolist()
+    train_ind[fold] = X_gdf_r['sykeid'][X_gdf_r.index2.isin(train_index)].tolist()
+    test_ind[fold] = X_gdf_r['sykeid'][~X_gdf_r.index2.isin(train_index)].tolist()
     
-    X_train_fold = X_gdf[X_gdf.index2.isin(train_index)]
-    y_train_fold = y_gdf[X_gdf.index2.isin(train_index)]
-    X_test_fold = X_gdf[~X_gdf.index2.isin(train_index)]
-    y_test_fold = y_gdf[~X_gdf.index2.isin(train_index)]
+    X_train_fold = X_gdf_r[X_gdf_r.index2.isin(train_index)]
+    y_train_fold = y_gdf_r[X_gdf_r.index2.isin(train_index)]
+    X_test_fold = X_gdf_r[~X_gdf_r.index2.isin(train_index)]
+    y_test_fold = y_gdf_r[~X_gdf_r.index2.isin(train_index)]
     
     # drop cols
-    X_train_fold = X_train_fold.drop(['geometry', 'sykeid', 'segment_ids', 'index2'], axis=1)
-    X_test_fold = X_test_fold.drop(['geometry', 'sykeid', 'segment_ids', 'index2'], axis=1)
+    X_train_fold = X_train_fold.drop(['sykeid', 'index2'], axis=1)
+    X_test_fold = X_test_fold.drop(['sykeid', 'index2'], axis=1)
     # normalize
     X_train_fold = normalize(X_train_fold)
     X_test_fold = normalize(X_test_fold)
     
     # random forest classifier
-    rf = RandomForestClassifier(n_estimators=150, max_depth=None, n_jobs=5) # ,max_features='sqrt',
+    rf = RandomForestRegressor(n_estimators=150, max_depth=None, n_jobs=5) # ,max_features='sqrt',
                               #  bootstrap=True, oob_score=True,
                               #  random_state=42)
     rf.fit(X_train_fold, y_train_fold)
     rf.score(X_test_fold, y_test_fold)
-    pred = rf.predict_proba(X_test_fold)
+    pred = rf.predict(X_test_fold)
     # to df
-    pred_df = pd.DataFrame(pred, columns=['SAV', 'Fucus', 'Sand', 'Sparse', 'Deep'])    
+    pred_df = pd.DataFrame(pred, columns=['pred'])    
     # add sykeid column
     pred_df['sykeid'] = test_ind[fold]
     # concat
     test_df = pd.concat([test_df, pred_df])   
 
     # sykeid's to list
-    test_ids.append(X_gdf['sykeid'][~X_gdf.index2.isin(train_index)].tolist())
+    test_ids.append(X_gdf_r['sykeid'][~X_gdf_r.index2.isin(train_index)].tolist())
  #   train_ind.append(train_index.tolist())
  #   test_ind.append(test_index.tolist())
     print(f"Fold {i}:")
@@ -498,87 +868,25 @@ gdf['sykeid'] = gdf['sykeid'].astype(int)
 test_df = test_df.merge(gdf[['sykeid', 'fucaceae_cov']], left_on='sykeid', right_on='sykeid')
 # correlation
 from scipy.stats import pearsonr
-corr, _ = pearsonr(test_df.fucaceae_cov, test_df.Fucus)
+corr, _ = pearsonr(test_df.fucaceae_cov, test_df.pred)
 print('Pearsons correlation: %.3f' % (corr))
 
 # plot predicted probability and observed coverage
 fig, ax = plt.subplots()
-ax.scatter(test_df.fucaceae_cov, test_df.Fucus, s=0.7)
-ax.text(0, 0.9, 'Pearsons correlation: %.3f' % (corr))
-p1, p0 = np.polyfit(test_df.fucaceae_cov, test_df.Fucus, deg=1)
+ax.scatter(test_df.fucaceae_cov, test_df.pred, s=0.7)
+ax.text(0, max(test_df.pred)-1, 'Pearsons correlation: %.3f' % (corr))
+p1, p0 = np.polyfit(test_df.fucaceae_cov, test_df.pred, deg=1)
 ax.axline(xy1=(0, p0), slope=p1, lw=0.5, color='black', alpha=0.7)
 ax.grid(alpha=0.5)
-plt.title('Fucus cover to predicted probability WV-2')
+ax.set_xlabel('Observed')
+ax.set_ylabel('Predicted')
+plt.title('K-Fold RFRegressor predicted Fucus cover (%), WV-2')
 plt.tight_layout()
 # save 
-plotout = os.path.join(os.path.dirname(fp_img), 'plots', 'Fucus_to_pred_proba_WV-2.png')
+plotout = os.path.join(os.path.dirname(fp_img), 'plots', 'KFold_prediction_result_WV-2.png')
 plt.savefig(plotout, dpi=150, format='PNG')
 plt.show()
 
-# save
-import json
-test_ind_outdir = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs'
-test_ind_out = os.path.join(test_ind_outdir, 'test_manualedit_3011__VHRstratifiedKFold.json')
-if os.path.isdir(test_ind_outdir) == False:
-    os.mkdir(test_ind_out)
-with open(test_ind_out, 'w') as fp_out:
-    json.dump(test_ind, fp_out, indent=4)
-# save df
-test_df_out = test_df[['Fucus', 'sykeid', 'fucaceae_cov']]
-test_df_out = test_df_out.rename({'Fucus': 'fucus_predproba', 'fucaceae_cov': 'fucus_cover'}, axis=1)
-df_out = os.path.join(test_ind_outdir, 'VHR_test_predictions.csv')
-test_df_out.to_csv(df_out, sep=';')
-
-# drop columns
-X_gdf_train = X_gdf.drop(['geometry', 'sykeid', 'segment_ids', 'index2'], axis=1)
-# CV
-n_scores = cross_val_score(rf, X_gdf_train, y_gdf, cv=skf, scoring='accuracy')
-print('n=',str(n), '%.3f (%.3f)' % (np.mean(n_scores), np.std(n_scores)))
-# CV predictions
-cv_pred = cross_val_predict(rf, X_gdf_train, y_gdf, cv=skf, n_jobs=10, method='predict_proba')
-# to dataframe
-df_cv_pred = pd.DataFrame(cv_pred, columns=['SAV', 'Fucus', 'Sand', 'Sparse', 'Deep'])
-df_cv_pred['sykeid'] = test_ids
-# convert column to int
-df_cv_pred['sykeid'] = df_cv_pred['sykeid'].astype(int)
-gdf['sykeid'] = gdf['sykeid'].astype(int)
-# join field observations
-df_cv_pred = df_cv_pred.merge(gdf[['sykeid', 'fucaceae_cov']], left_on='sykeid', right_on='sykeid')
-
-
-
-# train test pts to arrays
-X_gdf_train_arr = np.array(X_gdf_train)
-y_gdf_arr = np.array(y_gdf)
-# normalize 
-X_gdf_train_arr = normalize(X_gdf_train_arr, axis=1)
-# train test split
-X_train, X_test, y_train, y_test = train_test_split(X_gdf_train_arr, y_gdf_arr,
-                                                    test_size=0.3,
-                                                    random_state=42, shuffle=True,
-                                                    stratify=y_gdf_arr)
-# fit rf
-rf.fit(X_train, y_train)
-rf.score(X_test, y_test)
-
-# predict test
-predf = pd.DataFrame()
-#predf['truth'] = y_test
-predf['predict'] = rf.predict(X_test)
-# classification report
-print(metrics.classification_report(y_test, predf.predict))
-
-
-
-# set gdf_train index
-gdf_test = gdf_train.set_index('index2')
-# merge sykeid and classes
-df_cv_pred = df_cv_pred.join(gdf_test[['new_class', 'geometry']], on='fold_index', how='left')
-
-
-# save
-df_out = os.path.join(os.path.dirname(fp_gt), 'cv_10fold_pred.csv')
-df_cv_pred.to_csv(df_out, sep=';', columns=df_cv_pred.columns)
 
 #%%
 from sklearn.neural_network import MLPClassifier
@@ -594,11 +902,11 @@ X_gdf_ind = gdf_train.drop(['new_class', 'sykeid'], axis=1)
 y_gdf_ind = gdf_train[['gt_sampled', 'index2']]
 
 
-skf = StratifiedKFold(n_splits=10)#, shuffle=True, random_state=42)
+skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
 for i, (train_index, test_index) in enumerate(skf.split(X_gdf_ind, y_gdf_ind.gt_sampled)):
     # select train and test rows
     train_fold = X_gdf_ind[X_gdf_ind.index2.isin(train_index)]
-    test_fold = X_gdf_ind[~X_gdf_ind.index2.isin(train_index)] # is not in train index
+    test_fold = X_gdf_ind[X_gdf_ind.index2.isin(test_index)] 
     
     # list of segments which in test and train
     test_ids = sorted(set(test_fold.segment_ids).intersection(train_fold.segment_ids))
@@ -649,7 +957,9 @@ for i, (train_index, test_index) in enumerate(skf.split(X_gdf_ind, y_gdf_ind.gt_
     fold_gdf_test.to_file(pts_out, driver='GPKG', layer=fold)    
 
     # select stack columns
-    fold_gdf_test_X = fold_gdf_test[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'tgi', 'gcc', 'eg', 'bg', 'gr', 'gbi', 'depth', 'pca1', 'pca2', 'pca3']]    
+    cols = list(gdf_train.columns[:-7])
+    #fold_gdf_test_X = fold_gdf_test[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8', 'tgi', 'gcc', 'eg', 'bg', 'gr', 'gbi', 'depth', 'pca1', 'pca2', 'pca3']]    
+    fold_gdf_test_X = fold_gdf_test[cols]
     fold_gdf_test_y = fold_gdf_test[['gt_sampled']]    
     # convert to array
     fold_array_test_X = np.array(fold_gdf_test_X)
@@ -793,7 +1103,7 @@ predicted = np.where(nodatamask == True, 0, predicted)
 outdir = os.path.join(os.path.dirname(fp_img), 'classification')
 if os.path.isdir(outdir) == False:
     os.mkdir(outdir)
-outfile = os.path.join(outdir, os.path.basename(fp_img).split('.')[0] + '_segmpix_multiclass_vis_bandratios_ind_pca_RFclassification_manualedit_pts_train_sav_brgralg.tif')
+outfile = os.path.join(outdir, os.path.basename(fp_img).split('.')[0] + '_segmpix_RFclassification.tif')
 # update metadata
 upmeta = meta.copy()
 upmeta.update(dtype='uint8',
