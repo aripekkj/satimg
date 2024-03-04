@@ -58,7 +58,7 @@ def computePCA(img):
     return pca_out, var_cumu    
 
 
-fp_img = '/mnt/d/users/e1008409/MK/S2/ac/S2A_L2W_20180715_T34VENVEP_merge/S2A_MSI_2018_07_15_10_03_43_T34VENVEP_L2W_RrsB1B2B3B4B5B6B7B8B8A_south.tif'
+fp_img = '/mnt/d/users/e1008409/MK/S2/ac/S2A_L2W_20180715_T34VENVEP_merge/S2A_MSI_2018_07_15_10_03_43_T34VENVEP_L2W_RrsB1B2B3B4B5B6B7B8B8A_south_median3x3_filt.tif'
 #fp_img = '/mnt/d/users/e1008409/MK/S2/ac/S2A_MSIL1C_20160913T100022_N0204_R122_T34VEP_20160913T100023_new/S2A_MSI_2016_09_13_10_00_23_T34VEP_L2W_RrsB1B2B3B4B5B8_WV2extent.tif'
 #fp_img = '/mnt/d/users/e1008409/MK/S2/c2rcc/subset_L1C_T34VEP_A006411_20160913T100023_s2resampled_10_C2RCC_Rrs_clip_median3x3_filt_masked_WV2extent.tif'
 #fp_pt_indices = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/test_stratifiedKFold_indices.json'
@@ -104,7 +104,7 @@ else:
     nodatamask = np.where(img[0] == meta['nodata'], True, False)
 
 # save masked image
-img_out = fp_img.split('.tif')[0] + 'depth_nd_masked.tif'
+img_out = fp_img.split('.tif')[0] + '_depth_nd_masked.tif'
 with rio.open(img_out, 'w', **meta, compress='LZW') as dst:
     dst.write(img.astype(meta['dtype']))
 
@@ -193,9 +193,10 @@ gr = gr.transpose(1,2,0)
 ndvi = ndvi.transpose(1,2,0)
 depth = depth.transpose(1,2,0)
 pca = pca.transpose(1,2,0)
-stack = np.dstack((img, eg, bg, gr, ndvi, depth, pca))
+stack = np.dstack((img, depth, pca)) #eg, bg, gr, ndvi,
 
 img = np.transpose(img, (2,0,1))
+depth = np.transpose(depth, (2,0,1))
 # save stack
 stack = np.transpose(stack, (2,0,1))
 # update nodata
@@ -208,19 +209,29 @@ stack_meta.update(dtype='float32',
 with rio.open(stack_out, 'w', **stack_meta, compress='LZW') as dst:
     dst.write(stack.astype(stack_meta['dtype']))
 
+# drop unnecessary layers and release memory
+import gc
+del img 
+del pca
+del depth
+gc.collect()
+
 # read stack
 with rio.open(stack_out) as src:
     stack = src.read()
 
 # read ground truth and skf indices
-fp_gt = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/velmudata_07112022_selkameri_south_bounds.gpkg'
+fp_gt = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/velmudata_07112022_selkameri_south_bounds_edit.gpkg'
 #fp_ind = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/test_stratifiedKFold_indices.json'
 
-#import json
+# read
 gdf = gpd.read_file(fp_gt, engine='pyogrio')
-#with open(fp_ind) as f:
-#    gdf_ind = json.load(f)
-print(len(gdf[(gdf.fucaceae_cov >= 30) & (gdf.field_depth < 2)]))
+# edit
+#gdf.new_class = np.where((gdf.new_class == 4) & (gdf.field_depth > 2), 7, gdf.new_class)
+#gdf = gdf[gdf.new_class != 0]
+#gdfout = fp_gt.split('.')[0] + '_edit.gpkg'
+#gdf.to_file(gdfout, driver='GPKG', engine='pyogrio')
+#print(len(gdf[(gdf.fucaceae_cov >= 30) & (gdf.field_depth < 2)]))
 # plot histgram of months
 gdf.pvm = pd.to_datetime(gdf.pvm)
 gdf.pvm.groupby([gdf.pvm.dt.year, gdf.pvm.dt.month]).count().plot(kind='bar') #plot
@@ -264,11 +275,12 @@ gdf['img_stack'] = [x for x in src.sample(coords)]
 src.close()
 # extract list
 stack_list = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band8a',
-              'eg', 'bg', 'gr', 'ndvi', 'depth', 'pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7', 'pca8', 'pca9'] #'Band5', 'Band6', 'Band7', 'Band8a'
+               'depth', 'pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7', 'pca8', 'pca9'] #'eg', 'bg', 'gr', 'ndvi',
 gdf[stack_list] = gpd.GeoDataFrame(gdf.img_stack.tolist(), index=gdf.index)
 # select columns
 stack_list.append('new_class')
 stack_list.append('field_depth')
+stack_list.append('segment_ids')
 stack_list.append('sykeid')
 stack_list.append('geometry')
 #stack_list.append('fucaceae_cov')
@@ -395,10 +407,10 @@ fig, ax = plt.subplots()
 ax.plot(dg.loc[1], color='green', label='Mixed SAV')
 ax.plot(dg.loc[2], color='#A27C1F', label='Brown algae')
 ax.plot(dg.loc[3], color='yellow', label='Sand')
-#ax.plot(dg.loc[4], color='red', label='Red algae')
-ax.plot(dg.loc[4], color='purple', label='Low SAV')
-ax.plot(dg.loc[5], color='blue', label='Deep water')
-#ax.plot(dg.loc[7], color='#FFD7A0', label='Turbid')
+ax.plot(dg.loc[4], color='red', label='Bare')
+ax.plot(dg.loc[5], color='purple', label='Low SAV')
+ax.plot(dg.loc[6], color='blue', label='Deep water')
+ax.plot(dg.loc[7], color='#FFD7A0', label='Turbid')
 #ax.plot(dg.iloc[4], color='#92E335', label='Vascular')
 ax.set_xticklabels([442.7, 492.4, 559.8, 664.6, 704.1, 740.5, 782.8, 832.8, 864.7]) #442.7, 492.4, 559.8, 664.6, 704.1, 740.5, 782.8, 832.8, 864.7, 945.1, 1373.5, 1613.7, 2202.4
 ax.set_xlabel('Wavelength (nm)')
@@ -526,6 +538,8 @@ y = gt[gt > 0]
 
 # train test from point data
 gdf_train = gdf_train[gdf_train.new_class != 0]
+gdf_train = gdf_train[gdf_train.field_depth < 5]
+#gdf_train[gdf_train.new_class == 7] = 4
 X_gdf = gdf_train.drop(['new_class', 'sykeid', 'geometry', 'depth'], axis=1)
 y_gdf = gdf_train['new_class']
 
@@ -678,20 +692,37 @@ gdf['sykeid'] = gdf['sykeid'].astype(int)
 df_cv_pred = df_cv_pred.merge(gdf[['sykeid', 'fucaceae_cov']], left_on='sykeid', right_on='sykeid')
 
 
+# test predicting in depth zones
+dzones = []
+n = 0
+while n < 4:
+    dzone = (n, n+1)
+    dzones.append(dzone)
+    n += 1
+for i in dzones:
+    test_gdf = gdf_train[(gdf_train.field_depth >= i[0]) & (gdf_train.field_depth < i[1])]
+    X_gdf = test_gdf.drop(['new_class', 'sykeid', 'geometry', 'depth'], axis=1)
+    y_gdf = test_gdf['new_class']
+    # train test pts to arrays
+    X_gdf_train_arr = np.array(X_gdf)
+    y_gdf_arr = np.array(y_gdf)
+    # normalize 
+    X_gdf_train_arr = normalize(X_gdf_train_arr, axis=1)
 
-# train test pts to arrays
-X_gdf_train_arr = np.array(X_gdf)
-y_gdf_arr = np.array(y_gdf)
-# normalize 
-X_gdf_train_arr = normalize(X_gdf_train_arr, axis=1)
-# train test split
-X_train, X_test, y_train, y_test = train_test_split(X_gdf_train_arr, y_gdf_arr,
+    # train test split    
+    X_train, X_test, y_train, y_test = train_test_split(X_gdf_train_arr, y_gdf_arr,
+                                                        test_size=0.3,
+                                                        random_state=42, shuffle=True,
+                                                        stratify=y_gdf_arr)
+
+# train test split    
+X_train, X_test, y_train, y_test = train_test_split(X, y,
                                                     test_size=0.3,
                                                     random_state=42, shuffle=True,
-                                                    stratify=y_gdf_arr)
+                                                    stratify=y)
 # fit rf
 rf.fit(X_train, y_train)
-rf.score(X_test, y_test)
+print(rf.score(X_test, y_test))
 
 # predict test
 predf = pd.DataFrame()
@@ -701,6 +732,40 @@ predf['predict'] = rf.predict(X_test)
 print(metrics.classification_report(y_test, predf.predict))
 
 
+
+# xgboost
+from xgboost import XGBClassifier
+from sklearn.metrics import accuracy_score
+new_y = y_train - 1
+new_y_test = y_test -1
+bst = XGBClassifier(n_estimators=150, max_depth=10, learning_rate=0.1)
+eval_set = [(X_test, new_y_test)]
+bst.fit(X_train, new_y, eval_set=eval_set)
+y_pred = bst.predict(X_test)
+acc = accuracy_score(new_y_test, y_pred)
+print(acc)
+
+#lightgbm
+import lightgbm as lgb
+# set params
+params = {'num_leaves': 50, 'objective': 'multiclass', 'num_class': 7}
+# train
+clf = lgb.LGBMClassifier()
+clf.fit(X_train, y_train, eval_set=[(X_test, y_test), (X_train, y_train)])
+print('Training accuracy {:.4f}'.format(clf.score(X_train,y_train)))
+print('Testing accuracy {:.4f}'.format(clf.score(X_test,y_test)))
+
+predf = pd.DataFrame()
+#predf['truth'] = y_test
+predf['predict'] = clf.predict(X_test)
+# classification report
+print(metrics.classification_report(y_test, predf.predict))
+# plot model
+lgb.plot_metric(clf)
+# confusion matrix
+cm = metrics.confusion_matrix(y_test, predf.predict)
+disp = metrics.ConfusionMatrixDisplay(cm, display_labels=clf.classes_)
+disp.plot()
 
 # set gdf_train index
 gdf_test = gdf_train.set_index('index2')
@@ -728,10 +793,11 @@ patch_size = np.max(modulos)
 stack_re_n = normalize(stack_re, axis=1)
 # split for prediction
 split_array = np.split(stack_re_n, patch_size, axis=0)
-j = 0
+j = 1
 for i in split_array: # NOTE: parallelize
-    prediction = rf.predict(i)
-#    prediction = rf.predict_proba(i)
+    #prediction = rf.predict(i)
+    #prediction = bst.predict(i)
+    prediction = clf.predict(i)
     preds.append(prediction)
     print(str(j),'/',str(len(split_array)))
     j += 1
@@ -742,6 +808,7 @@ predicted = predicted.reshape(stack_re.shape[0])
 # prediction back to 2D array
 predicted = predicted.reshape(1, meta['height'], meta['width'])
 
+#predicted = predicted + 1
 
 # mask nodata
 predicted = np.where(nodatamask == True, 0, predicted)
@@ -750,7 +817,7 @@ predicted = np.where(nodatamask == True, 0, predicted)
 outdir = os.path.join(os.path.dirname(fp_img), 'classification')
 if os.path.isdir(outdir) == False:
     os.mkdir(outdir)
-outfile = os.path.join(outdir, os.path.basename(fp_img).split('.')[0] + '__RFclassification_pts.tif')
+outfile = os.path.join(outdir, os.path.basename(fp_img).split('.')[0] + '_LGBM_obia.tif')
 # update metadata
 upmeta = meta.copy()
 upmeta.update(dtype='uint8',
