@@ -16,8 +16,12 @@ import xarray as xr
 import rioxarray as rxr
 import matplotlib.pyplot as plt
 from skimage.segmentation import felzenszwalb
+from dask import delayed
+from dask import compute
+from collections import Counter
 
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2c_20220812_v1_3035.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Eelgrass_2018-2023/Eelgrass_Kattegat__multiclass_2018_32632.gpkg'
 
 xds = rxr.open_rasterio(fp)
 # bounds from raster
@@ -141,10 +145,9 @@ for i in fw:
             dst.write(segments.astype(segmeta['dtype']))
         
         # =============================================================================        
-        # finer scale segmentation where is field data    
-        fp_shape = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Eelgrass_2018-2023/Eelgrass_Kattegat_Zostera_classes_2018_32632.gpkg'
+        # finer scale segmentation where is field data     
         # sample raster
-        gdf = sampleRaster(clip_out, fp_shape)
+        gdf = sampleRaster(clip_out, fp_pts)
         
         # extract sampled list
         gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
@@ -174,44 +177,82 @@ for i in fw:
         with rio.open(clip_out_iter, 'w', **segmeta, compress='LZW') as dst:
             dst.write(segments_iter.astype(segmeta['dtype']))
         # sample new segment ids to gdf       
-        gdf = sampleRaster(clip_out_iter, fp_shape)
+        gdf = sampleRaster(clip_out_iter, fp_pts)
         # extract sampled list
         gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
         gdf = gdf.drop('sampled', axis=1)
-
-# =============================================================================    
-# compute statistics for each segment
+        # handle possible duplicates, ie. points that are within same segment
+        # pts that have exact same sampled values
+        subset = ['segments']
+        gdf['duplicate'] = gdf.duplicated(subset=subset, keep=False)
+        print('Duplicated rows:', len(gdf[gdf.duplicate==True]))
+        # create id for finding duplicate rows
+        gdf['duplicate_id'] = gdf.groupby(subset).ngroup()
+        # select ones occurring more than once
+        v = gdf.duplicate_id.value_counts()
+        v = list(v.index[v.gt(1)])
+        # check if duplicates have same or different class
+        for vi in v:
+            sel = gdf[gdf.duplicate_id == vi]
+        
+            if len(sel) > 1:
+        #        print(sel[['ObservationsstedId', 'new_class']])
+                # find most common value
+                c = Counter(sel.new_class)
+                val, count = c.most_common()[0]
+                # if equal count of different values, get class from row with highest vegetation cover
+                if count == 1:
+                    sel_id = sel['ObservationsstedId'][sel.Coverage_pct == sel.Coverage_pct.max()].index[0] # select id where sav coverage is highest
+                    droplist = sel.index[sel.index != sel_id] # indices to drop
+                    # drop from gdf
+                    gdf = gdf.drop(droplist)
+                else:
+                    print('Majority value in', vi, val, 'with count', count)
+                    sel_id = sel['ObservationsstedId'][sel.new_class == val].index[0] # keep one row with majority value
+                    droplist = sel.index[sel.index != sel_id] # indices to drop
+                    # drop from gdf
+                    gdf = gdf.drop(droplist)
+        # add geometry x and y columns
+        gdf['x'] = gdf.geometry.x
+        gdf['y'] = gdf.geometry.y
+        # =============================================================================    
+        # compute statistics for each segment
+        # reshape
+        seg_re = segments_iter.reshape(-1)
+        img_re = xds_c[0:xds_c.band.shape[0]].values
+        img_re = img_re.reshape((img_re.shape[0],-1)).transpose((1,0))
+        delayed_funcs = []
+        # create delayed functions
+        for sg_id in np.unique(seg_re)[1:]: # start from index 1 to skip 0 ie. nodata
+            delayed_funcs.append(delayed(segStats)(sg_id, seg_re, img_re))
+        # execute delayed functions
+        start = time.time()
+        result = compute(delayed_funcs)
+        end_time = time.time()
+        print('Processed in %.3f minutes' % ((end_time - start)/60))
             
-# dask
-from dask import delayed
-from dask import compute
-# reshape
-seg_re = segments_iter.reshape(-1)
-img_re = xds_c[0:xds_c.band.shape[0]].values
-img_re = img_re.reshape((img_re.shape[0],-1)).transpose((1,0))
-delayed_funcs = []
-# create delayed functions
-for sg_id in np.unique(seg_re)[1:]: # start from index 1 to skip 0 ie. nodata
-    delayed_funcs.append(delayed(segStats)(sg_id, seg_re, img_re))
-# execute delayed functions
-start = time.time()
-result = compute(delayed_funcs)
-end_time = time.time()
-print('Processed in %.3f minutes' % ((end_time - start)/60))
-    
-# extract result to dataframe
-segstats = pd.DataFrame(result[0], columns=['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10', 'segment_id'])
-# join class 
-segstats = segstats.set_index('segment_id').join(gdf[['segments', 'new_class']].set_index('segments'))
-
-# save csv
-segstats_dir = os.path.join(os.path.dirname(clip_out), 'segstats')
-if os.path.isdir(segstats_dir) == False:
-    os.mkdir(segstats_dir)
-segstats_out = os.path.join(segstats_dir, os.path.basename(clip_out_iter).split('.')[0] + '_segstats.csv')
-segstats.to_csv(segstats_out, sep=';')
-
-
+        # extract result to dataframe
+        segstats = pd.DataFrame(result[0], columns=['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10', 'segment_id'])
+        # join class 
+        segstats = segstats.set_index('segment_id').join(gdf.set_index('segments'))
+        
+        # add raster patch name df
+        clip_basename = os.path.basename(clip_out_iter)
+        segstats['tilename'] = clip_basename
+        # GeoDataFrame of sampled segments
+        segstats_gdf = segstats.dropna(subset='geometry')
+        segstats_gdf = gpd.GeoDataFrame(segstats_gdf, geometry=gpd.points_from_xy(segstats_gdf.x, segstats_gdf.y))
+        # delete first segmentation file as it is temporary layer
+        os.remove(clip_out)
+        # save 
+        segstats_dir = os.path.join(os.path.dirname(clip_out), 'segstats')
+        if os.path.isdir(segstats_dir) == False:
+            os.mkdir(segstats_dir)
+        segstats_out = os.path.join(segstats_dir, os.path.basename(clip_out_iter).split('.')[0] + '_segstats.csv')
+        segstats_gdf_out = os.path.join(segstats_dir, os.path.basename(clip_out_iter).split('.')[0] + '_segstats_gdf.gpkg')
+        segstats.to_csv(segstats_out, sep=';')
+        segstats_gdf.to_file(segstats_gdf_out, driver='GPKG', engine='pyogrio')
+        
 
 
 
