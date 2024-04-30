@@ -2,7 +2,12 @@
 """
 Created on Tue Apr 23 12:36:15 2024
 
-@author: E1008409
+Create OBIA based ML training dataset from raster and field inventory point observations. 
+
+TODO: Consider adding another segmentation iteration where several points within segment
+    Parallelize and clean
+    
+@author: Ari-Pekka Jokinen
 """
 
 import sys
@@ -12,9 +17,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import rasterio as rio
-import xarray as xr
 import rioxarray as rxr
-import matplotlib.pyplot as plt
 from skimage.segmentation import felzenszwalb
 from dask import delayed
 from dask import compute
@@ -62,11 +65,16 @@ def segStats(segment_id, segments, img_array):
     # select pixels by id
     segpx = img_array[segments == segment_id]
 #    egpx = eg_index[segments == segment_id]
-    
+    gr = np.nanmean(segpx[:,2] / segpx[:,3]) # green/red band ratio
+    gb = np.nanmean(segpx[:,2] / segpx[:,1]) # green/blue band ratio
+    eg = np.nanmean(2*segpx[:,2] - (segpx[:,1] + segpx[:,3])) # excess greenness
     # stats
-    segmean = np.mean(segpx, axis=0).tolist() # mean value for each band
+    segmean = np.nanmean(segpx, axis=0).tolist() # mean value for each band
 #   egmean = np.mean(egpx, axis=0)
-#    segmean.append(egmean) # add index mean to list
+    segmean.append(gr) # add mean gr to list
+    segmean.append(gb) # add mean gb to list
+    segmean.append(eg) # add mean eg to list
+    
     segmean.append(segment_id)
     return segmean
 
@@ -124,6 +132,7 @@ for i in fw:
         segments = np.where(nodatamask == True, 0, segments)
         # check that all segments are not nodata
         if not np.any(segments) == True:
+            print('All nodata')
             continue
         # expand dims
         segments = np.expand_dims(segments, axis=0)
@@ -146,6 +155,7 @@ for i in fw:
         
         # =============================================================================        
         # finer scale segmentation where is field data     
+        #TODO consider adding new segmentation iteration if different bottom classes within segment
         # sample raster
         gdf = sampleRaster(clip_out, fp_pts)
         
@@ -160,7 +170,9 @@ for i in fw:
         for segid in segments_ids:
             segments_fd = np.where(segments == segid, 1, segments_fd)
         # select area from image
-        img = np.where(segments_fd == 1, xds_c[0:xds_c.band.shape[0]].values, 0)
+        img = np.where(segments_fd == 1, xds_c[0:xds_c.band.shape[0]].values, np.nan)
+        # mask
+        #img = np.where(nodatamask == True, np.nan, img)
         # image segmentation parameters 
         n2 = 5
         sig2 = 0.0005
@@ -181,6 +193,7 @@ for i in fw:
         # extract sampled list
         gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
         gdf = gdf.drop('sampled', axis=1)
+        
         # handle possible duplicates, ie. points that are within same segment
         # pts that have exact same sampled values
         subset = ['segments']
@@ -207,7 +220,7 @@ for i in fw:
                     # drop from gdf
                     gdf = gdf.drop(droplist)
                 else:
-                    print('Majority value in', vi, val, 'with count', count)
+                    print('Majority value in', vi, 'is', val, 'with count', count)
                     sel_id = sel['ObservationsstedId'][sel.new_class == val].index[0] # keep one row with majority value
                     droplist = sel.index[sel.index != sel_id] # indices to drop
                     # drop from gdf
@@ -232,7 +245,7 @@ for i in fw:
         print('Processed in %.3f minutes' % ((end_time - start)/60))
             
         # extract result to dataframe
-        segstats = pd.DataFrame(result[0], columns=['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10', 'segment_id'])
+        segstats = pd.DataFrame(data=result[0], columns=['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10', 'gr', 'gb', 'eg', 'segment_id'])
         # join class 
         segstats = segstats.set_index('segment_id').join(gdf.set_index('segments'))
         
