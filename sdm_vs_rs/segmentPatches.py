@@ -6,6 +6,7 @@ Create OBIA based ML training dataset from raster and field inventory point obse
 
 TODO: Consider adding another segmentation iteration where several points within segment
     Parallelize and clean
+    Don't save gdf if no points
     
 @author: Ari-Pekka Jokinen
 """
@@ -14,10 +15,12 @@ import sys
 import os
 import time
 import numpy as np
+import scipy as sc
 import pandas as pd
 import geopandas as gpd
 import rasterio as rio
 import rioxarray as rxr
+from sklearn.decomposition import PCA
 from skimage.segmentation import felzenszwalb
 from dask import delayed
 from dask import compute
@@ -59,24 +62,60 @@ def computeTileBounds(raster_fp, tilesize, tilewidth_no, tileheight_no):
     else:
         bounds = (minx, miny, maxx, maxy)
     return bounds
+   
+def computePCA(img):
+    # flatten each band
+    flat_data = np.empty((img.shape[1]*img.shape[2], img.shape[0]))
+
+    for i in range(img.shape[0]):
+        band = img[i,:,:]
+        flat_data[:,i-1] = band.flatten()
+    # replace nan
+    flat_data = np.where(np.isnan(flat_data), 0, flat_data)
+    # delete nan
+    test = np.delete(flat_data, np.where(flat_data == 0), axis=0)
+
+    # sklearn PCA
+    pca = PCA()
+    pca.fit(test)    
+    # apply pca
+    pca_out = pca.transform(flat_data)
+    # reshape 
+    pca_out = np.reshape(pca_out, (img.shape[1], img.shape[2], img.shape[0]))
+    pca_out = np.transpose(pca_out, (2,0,1))
+    # select pc's that explain 99% of variation
+    #pca_out = pca_out[0:3,:,:]
+    return pca_out    
 
 # function to get stats
-def segStats(segment_id, segments, img_array):
+def segStats(segment_id, segments, img_array, img_pca):
+    stats = []
     # select pixels by id
     segpx = img_array[segments == segment_id]
-#    egpx = eg_index[segments == segment_id]
+    pcapx = pca_re[segments == segment_id]
     gr = np.nanmean(segpx[:,2] / segpx[:,3]) # green/red band ratio
     gb = np.nanmean(segpx[:,2] / segpx[:,1]) # green/blue band ratio
     eg = np.nanmean(2*segpx[:,2] - (segpx[:,1] + segpx[:,3])) # excess greenness
-    # stats
-    segmean = np.nanmean(segpx, axis=0).tolist() # mean value for each band
-#   egmean = np.mean(egpx, axis=0)
-    segmean.append(gr) # add mean gr to list
-    segmean.append(gb) # add mean gb to list
-    segmean.append(eg) # add mean eg to list
-    
-    segmean.append(segment_id)
-    return segmean
+    # compute stats
+    #segmean = np.nanmean(segpx, axis=0).tolist() # mean value for each band
+    segstats = sc.stats.describe(segpx, axis=0, nan_policy='omit')
+    pcamean = np.nanmean(pcapx, axis=0).tolist() # mean of each pca band
+    # combine stats
+    stats.extend(segstats.mean.tolist())
+    stats.extend(segstats.minmax[0].tolist())
+    stats.extend(segstats.minmax[1].tolist())
+    stats.extend(segstats.variance.tolist())
+    stats.extend(segstats.skewness.tolist())
+    stats.extend(segstats.kurtosis.tolist())
+    # add pca
+    stats.extend(pcamean)
+    # add indices
+    stats.append(gr) # add mean gr to list
+    stats.append(gb) # add mean gb to list
+    stats.append(eg) # add mean eg to list
+    # add id
+    stats.append(segment_id)
+    return stats
 
 def sampleRaster(raster_fp, geodataframe_fp):
     # read points
@@ -121,6 +160,15 @@ for i in fw:
                 crs=xds.rio.crs)            
         except:
             continue
+        # change nodata
+        xds_c.values = np.where(xds_c == xds_c._FillValue, np.nan, xds_c)
+        # compute ndwi and mask land
+        ndwi = (xds_c.values[2]-xds_c.values[7]) / (xds_c.values[2]+xds_c.values[7])
+        # mask land
+        xds_c.values = np.where(ndwi < -0.5, np.nan, xds_c)
+        # compute pca
+        pca = computePCA(xds_c.values)
+        pca = np.where(np.isnan(xds_c.values), np.nan, pca) # mask nan
         # felzenswalb segmentation 
         start = time.time()
         segments = felzenszwalb(xds_c[0:xds_c.band.shape[0]].values, scale=s, sigma=sig, min_size=n, channel_axis=0)
@@ -234,18 +282,29 @@ for i in fw:
         seg_re = segments_iter.reshape(-1)
         img_re = xds_c[0:xds_c.band.shape[0]].values
         img_re = img_re.reshape((img_re.shape[0],-1)).transpose((1,0))
+        pca_re = pca.reshape((pca.shape[0],-1)).transpose((1,0))
+        
         delayed_funcs = []
         # create delayed functions
         for sg_id in np.unique(seg_re)[1:]: # start from index 1 to skip 0 ie. nodata
-            delayed_funcs.append(delayed(segStats)(sg_id, seg_re, img_re))
+            delayed_funcs.append(delayed(segStats)(sg_id, seg_re, img_re, pca_re))
         # execute delayed functions
         start = time.time()
         result = compute(delayed_funcs)
         end_time = time.time()
         print('Processed in %.3f minutes' % ((end_time - start)/60))
-            
         # extract result to dataframe
-        segstats = pd.DataFrame(data=result[0], columns=['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10', 'gr', 'gb', 'eg', 'segment_id'])
+        segstats = pd.DataFrame(data=result[0], 
+                                columns=['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10',
+                                         'Band1min', 'Band2min', 'Band3min', 'Band4min', 'Band5min', 'Band6min', 'Band7min', 'Band8min', 'Band9min', 'Band10min',
+                                         'Band1max', 'Band2max', 'Band3max', 'Band4max', 'Band5max', 'Band6max', 'Band7max', 'Band8max', 'Band9max', 'Band10max',
+                                         'Band1var', 'Band2var', 'Band3var', 'Band4var', 'Band5var', 'Band6var', 'Band7var', 'Band8var', 'Band9var', 'Band10var',
+                                         'Band1skew', 'Band2skew', 'Band3skew', 'Band4skew', 'Band5skew', 'Band6skew', 'Band7skew', 'Band8skew', 'Band9skew', 'Band10skew',
+                                         'Band1kurt', 'Band2kurt', 'Band3kurt', 'Band4kurt', 'Band5kurt', 'Band6kurt', 'Band7kurt', 'Band8kurt', 'Band9kurt', 'Band10kurt',
+                                         'pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7', 'pca8', 'pca9', 'pca10',
+                                         'gr', 'gb', 'eg', 'segment_id'])
+        
+        
         # join class 
         segstats = segstats.set_index('segment_id').join(gdf.set_index('segments'))
         
