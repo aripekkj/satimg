@@ -32,20 +32,22 @@ import dask.bag as db
 
 # directory for pixel value csv files
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/segmentation/segvals'
-
+# filepath for ground truth points with sampled satimg values
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Eelgrass_2018-2023/Eelgrass_Kattegat__multiclass_2018_32632_LS2_sampled.gpkg'
 # read
-#df = pd.read_csv(fp, sep=';')
-#df = df.drop('Unnamed: 0', axis=1)
+gdf = gpd.read_file(fp_pts, engine='pyogrio')
+# columns to select for train, test data
+cols = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8']
 
 # read and merge dataframes
 df = pd.DataFrame()
 for file in glob.glob(os.path.join(fp, '*segvals.csv')):
     df1 = pd.read_csv(file, sep=';')
     df = pd.concat([df, df1])
-    
+
 # test --------------------------- #
 # select cols
-X = np.array(df[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8', 'pca1', 'pca2', 'pca3']])
+X = np.array(df[cols])#, 'pca1', 'pca2', 'pca3']])
 y = np.array(df['new_class'])
 
 X_train, X_test, y_train, y_test = train_test_split(X, y,
@@ -89,18 +91,21 @@ for t in train:
     if t in set(test):
         print('Value found in test')
     
-df['proba_RF'] = None
+gdf['proba_RF'] = None
+gdf['test_fold'] = None
 # evaluate
 for f in folds:
     # get fold point id's for train, test indices 
     train_pts = dfg['point_id'][dfg.index.isin(folds[f][0])]
+    test_pts = dfg['point_id'][dfg.index.isin(folds[f][1])]
+    
     # select fold train, test from gdf
     df_train = df[df.point_id.isin(train_pts)]
     df_test = df[~df.point_id.isin(train_pts)]
     # select columns
-    X_train = df_train[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8', 'pca1', 'pca2', 'pca3']]
+    X_train = df_train[cols]#[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8', 'pca1', 'pca2', 'pca3']]
     y_train = df_train['new_class']
-    X_test = df_test[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8', 'pca1', 'pca2', 'pca3']]
+    X_test = df_test[cols]#[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8', 'pca1', 'pca2', 'pca3']]
     y_test = df_test['new_class']
 
     #results = cross_val_score(rf, X, y, cv=skf)
@@ -119,15 +124,28 @@ for f in folds:
     # fit rf
     rf.fit(X_train_arr, y_train_arr)
     print('RF', rf.score(X_test_arr, y_test_arr))
+    # predictions for test array
     predf = pd.DataFrame()
-    #predf['truth'] = y_test
     predf['predict'] = rf.predict(X_test_arr)
     # classification report
     print('RF', metrics.classification_report(y_test_arr, predf.predict))
+    
     # predict proba to gdf
-    pred_proba = rf.predict_proba(X_test_arr)
-    df['proba_RF'].iloc[X_test.index] = pred_proba[:,0]
+    gdf_test = gdf[gdf.point_id.isin(test_pts)] # get test points
+    gdf_test = gdf_test.dropna(subset=cols)
+    gdf_train = gdf[gdf.point_id.isin(train_pts)] # get train points
+    
+    gdf_test_arr = np.array(gdf_test[cols]) # convert to array
+    pred_proba = rf.predict_proba(gdf_test_arr) #predict
+    gdf['proba_RF'].iloc[gdf_test.index] = pred_proba[:,0] # predicted value to gdf
+    
+    gdf['test_fold'].iloc[gdf_test.index] = f  
 
+# save
+gdf['proba_RF'] = gdf['proba_RF'].astype(float)
+gdf_out = fp_pts.split('.')[0] + '_preds.gpkg'
+gdf.to_file(gdf_out, engine='pyogrio')
+    
 # TODO plots?
 # ----------------------------------------------------------------------- #
 # TODO consider moving layer prediction to separate script
@@ -135,7 +153,8 @@ for f in folds:
 rf.fit(X, y)
 
 # create layer with Bands and PCA for prediction
-fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2c_20220812_v1_3035.tif'
+fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/S2_LS1_20180715_rrs_v1_clip_ext.tif'
+fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2a_20220812_v1_3035.tif'
 fp_pca = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2c_20220812_v1_3035_pca.tif'
 
 with rio.open(fp_img) as src:
@@ -153,9 +172,11 @@ img_stack = np.dstack((img, pca))
 img_stack = img_stack.transpose(2,0,1)
 img = img.transpose(2,0,1)
 pca = pca.transpose(2,0,1)
+
+img_stack = img
 # reshape to 1d
 img_re = img_stack.reshape((img_stack.shape[0],-1)).transpose((1,0))
-img_re = np.where(np.isnan(img_re), 0, img_re) # replace nans
+img_re = np.where((np.isnan(img_re)) | (img_re == meta['nodata']), 0, img_re) # replace nans
 preds = [] # list for split array predictions
 # find largest number within range for modulo 0
 modulos = []
@@ -188,7 +209,7 @@ predicted = np.where(nodatamask == 0, 0, predicted)
 outdir = os.path.join(os.path.dirname(fp_img), 'classification')
 if os.path.isdir(outdir) == False:
     os.mkdir(outdir)
-outfile = os.path.join(outdir, os.path.basename(fp_img).split('.')[0] + '_RF_segvals_bc_train.tif')
+outfile = os.path.join(outdir, os.path.basename(fp_img).split('.')[0] + '_RF_segvals.tif')
 # update metadata
 upmeta = meta.copy()
 upmeta.update(dtype='uint8',
