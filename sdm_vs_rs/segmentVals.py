@@ -29,9 +29,16 @@ from dask import delayed
 from dask import compute
 from collections import Counter
 
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2b_20220812_v1_3035.tif'
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2a_20220812_v1.01.tif'
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/S2_LS1_20180715_v101_32634_clip_ext_masked.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/velmudata_07112022_selkameri_south_bounds.gpkg'
+fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/ranta10_selkameri_south_4326.gpkg'
+
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2a_20220812_v1_3035.tif'
 fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Eelgrass_2018-2023/Eelgrass_Kattegat__multiclass_2018_32632.gpkg'
+fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Data_layers/Bathymetry_Composite_cleaned_0-10m_depth_4326.gpkg'
+
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/S2_LSxBLK_20201123_v1_3035.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/Black_Sea_habitat_data.gpkg'
 fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Data_layers/Bathymetry_Composite_cleaned_0-10m_depth_4326.gpkg'
 
 
@@ -99,6 +106,22 @@ def sampleRaster(raster_fp, geodataframe_fp):
         gdf['sampled'] = [x for x in src.sample(coords)]
     return gdf
 
+def sampleRasterToGDF(raster_fp, geodataframe):
+    # read points
+    #gdf = gpd.read_file(geodataframe_fp, engine='pyogrio')
+    # sample coords
+    with rio.open(raster_fp) as src:
+        meta = src.meta
+        crs = src.crs.to_epsg()
+        # check crs
+        if geodataframe.crs != src.crs:
+            geodataframe = geodataframe.to_crs(src.crs)
+        # get point coords
+        coords = [(x,y) for x,y in zip(geodataframe.geometry.x, geodataframe.geometry.y)]
+        # sample
+        geodataframe['sampled'] = [x for x in src.sample(coords)]
+    return geodataframe
+
 def clipToCRS(clip_bounds, raster_fp):
     xds = rxr.open_rasterio(fp)
     poly = gpd.read_file(fp_poly)
@@ -144,7 +167,7 @@ def maskAndSave(data_array):
         os.mkdir(tiledir)
     fp_out = os.path.join(tiledir, os.path.basename(fp).split('_')[1] + '_' + str(i) + '_' + str(j) + '.tif')
     xds_c.rio.to_raster(fp_out, compress='LZW')
-    return xds_c
+    return xds_c, fp_out
 
 tiledir = os.path.join(os.path.dirname(fp), 'tiles')
 if os.path.isdir(tiledir) == False:
@@ -170,19 +193,24 @@ s = 0.30
 # dict to save segment values
 #result = dict()
 result = pd.DataFrame()
+gdf_out = gpd.GeoDataFrame()
 cols = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10']
 pcacols = ['pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7', 'pca8', 'pca9', 'pca10']
 
 # create segmentation patches
 for i in fw:   
     for j in fh:
+        
         clip_bounds = computeTileBounds(fp, tilesize, i, j)    
         try:        
             data = clipToCRS(clip_bounds, fp)
         except:
             continue
-        xds_c = maskAndSave(data)
-        
+        xds_c, xds_c_path = maskAndSave(data)
+        # test that array is not empty
+        if np.isnan(xds_c.values).all() == True:
+            continue
+            
         # compute pca
         pca = computePCA(xds_c.values)
         pca = np.where(np.isnan(xds_c.values), np.nan, pca) # mask nan
@@ -191,7 +219,8 @@ for i in fw:
                        height=pca.shape[1],
                        width=pca.shape[2],
                        transform=xds_c.rio.transform())        
-        with rio.open(os.path.join(tiledir, 'LS2a_pca_tile_' + str(i) + '_' + str(j) + '.tif'), 'w', **pcameta, compress='LZW') as dst:
+        prefix = os.path.basename(fp).split('_')[1]
+        with rio.open(os.path.join(tiledir, prefix + '_pca_tile_' + str(i) + '_' + str(j) + '.tif'), 'w', **pcameta, compress='LZW') as dst:
             dst.write(pca.astype(pcameta['dtype'])) 
         # felzenswalb segmentation 
         start = time.time()
@@ -220,7 +249,7 @@ for i in fw:
         segdir = os.path.join(os.path.dirname(fp), 'segmentation')
         if os.path.isdir(segdir) == False:
             os.mkdir(segdir)
-        clip_out = os.path.join(segdir, os.path.basename(fp).split('_')[1] + '_n' + str(n) + '_s' + str(s).split('.')[1] + str(i) + '_' + str(j) + '.tif') 
+        clip_out = os.path.join(segdir, prefix + '_n' + str(n) + '_s' + str(s).split('.')[1] + str(i) + '_' + str(j) + '.tif') 
 
         # save
         with rio.open(clip_out, 'w', **segmeta, compress='LZW') as dst:
@@ -231,9 +260,12 @@ for i in fw:
         #TODO consider adding new segmentation iteration if different bottom classes within segment
         # sample raster
         gdf = sampleRaster(clip_out, fp_pts)
-        
         # extract sampled list
         gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
+        gdf = gdf.drop('sampled', axis=1)
+        # sample sat.img pixel values
+        gdf = sampleRasterToGDF(xds_c_path, gdf)
+        gdf[cols] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
         gdf = gdf.drop('sampled', axis=1)
         
         # get segment ids where is field data
@@ -262,12 +294,12 @@ for i in fw:
         with rio.open(clip_out_iter, 'w', **segmeta, compress='LZW') as dst:
             dst.write(segments_iter.astype(segmeta['dtype']))
         
-        #TODO 
         # sample new segment ids to gdf       
-        gdf = sampleRaster(clip_out_iter, fp_pts)
+        gdf = sampleRasterToGDF(clip_out_iter, gdf)
         # extract sampled list
         gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
         gdf = gdf.drop('sampled', axis=1)
+        
         
         # handle possible duplicates, ie. points that are within same segment
         # pts that have exact same sampled values
@@ -290,19 +322,20 @@ for i in fw:
                 val, count = c.most_common()[0]
                 # if equal count of different values, get class from row with highest vegetation cover
                 if count == 1:
-                    sel_id = sel['ObservationsstedId'][sel.Coverage_pct == sel.Coverage_pct.max()].index[0] # select id where sav coverage is highest
+                    sel_id = sel['ObservationsstedId'][sel.Coverage_pct == sel.Coverage_pct.max()].index[0] # select id where sav coverage is highest, DK Coverage_pct
                     droplist = sel.index[sel.index != sel_id] # indices to drop
                     # drop from gdf
                     gdf = gdf.drop(droplist)
                 else:
                     print('Majority value in', vi, 'is', val, 'with count', count)
-                    sel_id = sel['ObservationsstedId'][sel.new_class == val].index[0] # keep one row with majority value
+                    sel_id = sel['ObservationsstedId'][sel.new_class == val].index[0] # keep one row with majority value, DK ObservationsstedId
                     droplist = sel.index[sel.index != sel_id] # indices to drop
                     # drop from gdf
                     gdf = gdf.drop(droplist)
         # add geometry x and y columns
         gdf['x'] = gdf.geometry.x
         gdf['y'] = gdf.geometry.y
+        
         # =============================================================================    
         # select pixels from each segment
         # reshape
@@ -320,7 +353,7 @@ for i in fw:
             pcavals = pca_re[seg_re == sg_id] # get pca pixels
             #pcalist = [vals.tolist() for vals in pcavals]
             new_class = int(gdf.new_class[gdf.segments == sg_id].values[0]) # get habitat class
-            point_id = gdf.point_id[gdf.segments == sg_id].values[0] # get point id
+            point_id = gdf.point_id[gdf.segments == sg_id].values[0] # get point id, DK point_id
             
             # to dict
             #result[int(point_id)] = dict(img=pxlist,
@@ -334,6 +367,9 @@ for i in fw:
             
             result = pd.concat([result, segresult])
 
+        # concat gdf
+        gdf_out = pd.concat([gdf_out, gdf])
+        
 # delete first segmentation file as it is temporary layer
 os.remove(clip_out)
 # save 
@@ -342,6 +378,9 @@ if os.path.isdir(segvals_dir) == False:
     os.mkdir(segvals_dir)
 segvals_out = os.path.join(segvals_dir, os.path.basename(clip_out_iter).split('_')[0] + '_segvals.csv')
 result.to_csv(segvals_out, sep=';') 
+# save geodataframe
+gdf_outfile = os.path.join(os.path.dirname(fp_pts), fp_pts.split('.')[0] + prefix + '_sampled.gpkg')
+gdf_out.to_file(gdf_outfile, driver='GPKG')
 #with open(segvals_out, 'w') as of:
 #    json.dump(result, of, indent=4)
 
