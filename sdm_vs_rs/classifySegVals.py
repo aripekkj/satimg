@@ -29,40 +29,56 @@ from dask import delayed
 from dask import compute
 import dask.bag as db
 
+#TODO test other models
+
 
 # directory for pixel value csv files
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/segmentation/segvals'
 # filepath for ground truth points with sampled satimg values
 fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Eelgrass_2018-2023/Eelgrass_Kattegat__multiclass_2018_32632_LS2_sampled.gpkg'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/velmudata_07112022_selkameri_south_boundsLS1_sampled.gpkg'
+
 # read
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
+#gdf = gdf.rename(columns={'sykeid':'point_id'})
 # columns to select for train, test data
 cols = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8']
 
+nans = gdf[gdf[cols].isna().any(axis=1)]
+nanout = fp_pts.split('.')[0] + '_nans.gpkg'
+nans.to_file(nanout, engine='pyogrio')
+gdf = gdf.dropna(subset=[cols], how='all')
 # read and merge dataframes
 df = pd.DataFrame()
 for file in glob.glob(os.path.join(fp, '*segvals.csv')):
     df1 = pd.read_csv(file, sep=';')
     df = pd.concat([df, df1])
-
-# test --------------------------- #
+    
 # select cols
 X = np.array(df[cols])#, 'pca1', 'pca2', 'pca3']])
 y = np.array(df['new_class'])
+# standardize data
+scaler = StandardScaler().fit(X)
+X = scaler.transform(X)
+le = LabelEncoder() 
+le.fit(np.unique(y)) # fit classes
+y = le.transform(y) # transform
+print(np.unique(y)) # check result
 
-X_train, X_test, y_train, y_test = train_test_split(X, y,
-                                                    test_size=0.3,
-                                                    shuffle=True,
-                                                    stratify=y)
-
+# define models
 # random forest classifier
 rf = RandomForestClassifier(n_estimators=150, max_depth=None, n_jobs=5, max_features='sqrt',
                             bootstrap=True, oob_score=True,
                             random_state=42)
+
+# quick test --------------------------- #
+X_train, X_test, y_train, y_test = train_test_split(X, y,
+                                                    test_size=0.3,
+                                                    shuffle=True,
+                                                    stratify=y)
 # fit rf
 rf.fit(X_train, y_train)
 rf.score(X_test, y_test)
-
 # predict test
 predf = pd.DataFrame()
 #predf['truth'] = y_test
@@ -71,56 +87,42 @@ predf['predict'] = rf.predict(X_test)
 print(metrics.classification_report(y_test, predf.predict))
 #----------------------------------#
 
-# get unique point_id, bottom class values
-dfm = df.groupby('point_id')
-dfg = dfm.apply(lambda x: x['new_class'].unique())
-dfg = dfg.apply(pd.Series)
-dfg = dfg.reset_index()
-dfg.rename(columns={0: 'new_class'}, inplace=True)
-
 # make stratified KFolds
 folds = dict()
 skf = StratifiedKFold(n_splits=10, random_state=42, shuffle=True)
-for i, (train, test) in enumerate(skf.split(dfg.point_id, dfg.new_class)):
-    # save train, test indices to dictionary
+# use field obs points
+for i, (train, test) in enumerate(skf.split(gdf.point_id, gdf.new_class)):
+    # save train, test point_id's to dictionary
     k = 'fold_' + str(i+1)
-    folds[k] = (train.tolist(), test.tolist())
-
-for t in train:
-#    print(t)
-    if t in set(test):
-        print('Value found in test')
+    tr_pts = gdf['point_id'].iloc[train].tolist() # get point_id's by index
+    te_pts = gdf['point_id'].iloc[test].tolist()
+    folds[k] = (tr_pts, te_pts)
+    #double check that sets are separate (can be removed later)
+    for t in train:
+    #    print(t)
+        if t in set(test):
+            print('Value found in test')
     
 gdf['proba_RF'] = None
 gdf['test_fold'] = None
 # evaluate
 for f in folds:
-    # get fold point id's for train, test indices 
-    train_pts = dfg['point_id'][dfg.index.isin(folds[f][0])]
-    test_pts = dfg['point_id'][dfg.index.isin(folds[f][1])]
+    # select pixel values by point_id
+    df_train = df[df.point_id.isin(folds[f][0])]
+    df_test = df[df.point_id.isin(folds[f][1])]
     
-    # select fold train, test from gdf
-    df_train = df[df.point_id.isin(train_pts)]
-    df_test = df[~df.point_id.isin(train_pts)]
     # select columns
     X_train = df_train[cols]#[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8', 'pca1', 'pca2', 'pca3']]
     y_train = df_train['new_class']
     X_test = df_test[cols]#[['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8', 'pca1', 'pca2', 'pca3']]
     y_test = df_test['new_class']
 
-    #results = cross_val_score(rf, X, y, cv=skf)
-    #print("RF Accuracy: %.2f%% (%.2f%%)" % (results.mean()*100, results.std()*100))
     # convert to array
     X_train_arr = np.array(X_train)
     y_train_arr = np.array(y_train)
     X_test_arr = np.array(X_test)
     y_test_arr = np.array(y_test)
-    # select fold train, test from array
-#    X_train_f = X[folds[f][0]]
-#    y_train_f = y[folds[f][0]]
-#    X_test_f = X[folds[f][1]]
-#    y_test_f = y[folds[f][1]]
-    
+
     # fit rf
     rf.fit(X_train_arr, y_train_arr)
     print('RF', rf.score(X_test_arr, y_test_arr))
@@ -131,9 +133,9 @@ for f in folds:
     print('RF', metrics.classification_report(y_test_arr, predf.predict))
     
     # predict proba to gdf
-    gdf_test = gdf[gdf.point_id.isin(test_pts)] # get test points
+    gdf_test = gdf[gdf.point_id.isin(folds[f][1])] # get test points
     gdf_test = gdf_test.dropna(subset=cols)
-    gdf_train = gdf[gdf.point_id.isin(train_pts)] # get train points
+#    gdf_train = gdf[gdf.point_id.isin(train_pts)] # get train points
     
     gdf_test_arr = np.array(gdf_test[cols]) # convert to array
     pred_proba = rf.predict_proba(gdf_test_arr) #predict
