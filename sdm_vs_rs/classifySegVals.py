@@ -22,6 +22,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import normalize, StandardScaler, QuantileTransformer, PowerTransformer
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from sklearn.preprocessing import LabelEncoder
@@ -31,8 +32,8 @@ from dask import compute
 import dask.bag as db
 import gc
 
-#TODO test other models
-
+########################################################
+# filepaths
 # sansibar
 fp = '/mnt/d/users/e1008409/MK/sansibar/Sansibar_WV2_25_9_2016/segmentation/segvals'
 fp_pts = '/mnt/d/users/e1008409/MK/sansibar/Opetusdatat/habitat_field_data_wv2_encoded01_sampled.gpkg'
@@ -45,7 +46,8 @@ fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_habitat_d
 fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/LG_AHV_aineistot_2024-02-23_selkameri_south_3035_classes_encodedLS1_20180715_sampled.gpkg'
 fp_pts = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/velmudata_07112022_selkameri_south_bounds_edit3035_encodedLS1_20180715_sampled.gpkg'
 
-# read
+########################################################
+# read data
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
 #gdf = gdf.rename(columns={'sykeid':'point_id'})
 # columns to search for na
@@ -89,54 +91,42 @@ le.fit(np.unique(y)) # fit classes
 y = le.transform(y) # transform
 print(np.unique(y, return_counts=True)) # check result
 
+########################################################
 # define models #
+models = {'RF': {'model': RandomForestClassifier(n_jobs=6),
+                 'params': {"n_estimators": [50, 100, 150, 200, 500], "max_features": ['sqrt', 'log2']}
+                 },
+          'SVM': {'model': SVC(probability=True),
+                  'params': {"kernel": ['poly', 'rbf', 'sigmoid'], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01, 'scale']}},
+          'XGB': {'model': XGBClassifier(),
+                  'params': {'objective': ['multi:softmax'], 'eval_metric': ['mlogloss'],
+                             'n_estimators': [50, 100, 150], 'max_depth': [3,6],
+                             'subsample': [0.5], 'num_class': [len(np.unique(y))]}
+                  }
+#          'LightGBM':
+#          'MLP':
+          }
 
-# random forest classifier
-rf = RandomForestClassifier(max_depth=None, n_jobs=5, max_features='sqrt',
-                            bootstrap=True, oob_score=True,
-                            random_state=42)
-models = {'Random forest': RandomForestClassifier(),
-          'XGBoost': XGBClassifier()}
-params = {"n_estimators": [50, 100, 150], "max_features": ['sqrt']}
-# GridSearchCV for hyperparameter optimization
+# Stratified KFold for hyperparameter tuning
 skf = StratifiedKFold(n_splits=5, random_state=42, shuffle=True)
+# hyperparameter optimization
+for m in models:
+    gcv = GridSearchCV(models[m]['model'], param_grid=models[m]['params'], scoring='accuracy', cv=skf)
+    result = gcv.fit(X,y)
+    # summarize result
+    print('Scores: %s' % result.scoring)
+    print('Best Score: %s' % result.best_score_)
+    print('Best Hyperparameters: %s' % result.best_params_)
+    # save best params
+    models[m]['best_params'] = result.best_params_
 
-clf = GridSearchCV(rf, param_grid=params, scoring='accuracy', cv=skf)
-result = clf.fit(X,y)
-
-# summarize result
-print('Scores: %s' % result.scoring)
-print('Best Score: %s' % result.best_score_)
-print('Best Hyperparameters: %s' % result.best_params_)
-
-# define model with best params
-rf = RandomForestClassifier(n_estimators=result.best_params_.get('n_estimators'), max_features=result.best_params_.get('max_features'),
-                            max_depth=None, n_jobs=5, bootstrap=True, oob_score=True,
-                            random_state=42)
-
-X_train, X_test, y_train, y_test = train_test_split(X, y,
-                                                    test_size=0.3,
-                                                    shuffle=True,
-                                                    stratify=y)
-# fit rf
-rf.fit(X_train, y_train)
-rf.score(X_test, y_test)
-# predict test
-predf = pd.DataFrame()
-#predf['truth'] = y_test
-predf['predict'] = rf.predict(X_test)
-# classification report
-print(metrics.classification_report(y_test, predf.predict))
 #----------------------------------#
-
-params = {'objective': 'multi:softmax', 'eval_metric': 'mlogloss'}
-bst = XGBClassifier(n_estimators=100, max_depth=10, learning_rate=0.1, subsample=0.5, num_class=len(np.unique(y)), **params)
-eval_set = [(X_test, y_test)]
-bst.fit(X_train, y_train, eval_set=eval_set)
-y_pred = bst.predict(X_test)
-acc = accuracy_score(y_test, y_pred)
-print(acc)
-
+#params = {'objective': 'multi:softmax', 'eval_metric': 'mlogloss'}
+#bst = XGBClassifier(n_estimators=100, max_depth=10, learning_rate=0.1, subsample=0.5, num_class=len(np.unique(y)), **params)
+#eval_set = [(X_test, y_test)]
+#bst.fit(X_train, y_train, eval_set=eval_set)
+#y_pred = bst.predict(X_test)
+#acc = accuracy_score(y_test, y_pred)
 
 
 #----------------------------------#
@@ -157,31 +147,21 @@ for i, (train, test) in enumerate(skf.split(gdf.point_id, gdf.new_class)):
         if t in set(test):
             print('Value found in test')
     
-#gdf['proba_RF'] = None
-
 gdf['test_fold'] = None
-# create output column names
-#colnames = []
-#for name in gdf.hab_class.unique():
-#    cname = 'proba_RF_' + name
-#    colnames.append(cname)
-#gdf[colnames] = None
 # create columns for all class probabilities
-proba_cols_rf = []
-proba_cols_xgb = []
+proba_cols = []
 
-for k in sorted(gdf.hab_class.unique()):
-    proba_col_rf_name = 'proba_RF_' + str(k)
-    proba_col_xgb_name = 'proba_XGB_' + str(k)
-    proba_cols_rf.append(proba_col_rf_name)
-    proba_cols_xgb.append(proba_col_xgb_name)
-gdf[proba_cols_rf] = None
-gdf[proba_cols_xgb] = None
+for m in models:
+    for k in sorted(gdf.hab_class.unique()):
+        proba_col_name = 'proba_' + m + '_' + str(k)
+        proba_cols.append(proba_col_name)
+# add columns to dataframe
+for p in proba_cols:
+    gdf[p] = None
 
 # accuracy df
-df_acc_cols = ['RF_OA', 'XGB_OA']
+df_acc_cols = ['RF_OA', 'SVM_OA', 'XGB_OA']
 df_acc = pd.DataFrame(index=folds.keys(),  columns=[df_acc_cols])
-
 
 # evaluate
 for f in folds:
@@ -202,85 +182,86 @@ for f in folds:
     y_test_arr = le.transform(np.array(y_test))
     print('Classes in train set', np.unique(y_train_arr ,return_counts=True))
     print('Classes in test set', np.unique(y_test_arr ,return_counts=True))
-
-    # fit rf
-    rf.fit(X_train_arr, y_train_arr)
-    print('RF', rf.score(X_test_arr, y_test_arr))
-    # predictions for test array
-    predf = pd.DataFrame()
-    predf['predict_rf'] = rf.predict(X_test_arr)
-    # classification report
-    print('RF', metrics.classification_report(y_test_arr, predf.predict_rf))
     
-    # add result to df
-    df_acc.loc[f, 'RF_OA'] = accuracy_score(y_test_arr, predf.predict_rf)
+    # fit classifier
+    for m in models:
+        clf = models[m]['model'].set_params(**models[m]['best_params']) # set model parameters according to GridSearchCV
+        clf.fit(X_train_arr, y_train_arr) # fit data
+        print(m, clf.score(X_test_arr, y_test_arr))
+        
+        # predictions for test array
+        predf = pd.DataFrame()
+        predf['predict_clf'] = clf.predict(X_test_arr)
+        # classification report
+        print(m, metrics.classification_report(y_test_arr, predf.predict_clf))
+        
+        # add result to df
+        df_acc.loc[f, m + '_OA'] = accuracy_score(y_test_arr, predf.predict_clf)
 #    precision_score(y_test_arr, predf.predict_rf, labels=[1,2])
 #    recall_score(y_test_arr, predf.predict_rf)
+        
+        # predict proba to gdf
+        gdf_test = gdf[gdf.point_id.isin(folds[f][1])] # get test points
+        gdf_test = gdf_test.dropna(subset=traincols)
+        
+        gdf_test_arr = scaler.transform(np.array(gdf_test[traincols])) # convert to array and standardize
+        pred_proba = clf.predict_proba(gdf_test_arr) #predict
     
-    bst.fit(X_train_arr, y_train_arr)
-    predf['predict_xgb'] = bst.predict(X_test_arr)
-    print('XGB', metrics.classification_report(y_test_arr, predf.predict_xgb))
-    df_acc.loc[f, 'XGB_OA'] = accuracy_score(y_test_arr, predf.predict_xgb)
-    
-    # predict proba to gdf
-    gdf_test = gdf[gdf.point_id.isin(folds[f][1])] # get test points
-    gdf_test = gdf_test.dropna(subset=traincols)
-#    gdf_train = gdf[gdf.point_id.isin(train_pts)] # get train points
-    
-    gdf_test_arr = scaler.transform(np.array(gdf_test[traincols])) # convert to array and standardize
-    pred_proba_rf = rf.predict_proba(gdf_test_arr) #predict
-    pred_proba_xgb = bst.predict_proba(gdf_test_arr) #predict
-    
-#    gdf['proba_RF'].iloc[gdf_test.index] = pred_proba[:,1] # predicted value to gdf
-    # add predictions for all classes
-    # TODO maybe wrap to a function    
-    for n in np.arange(len(proba_cols_rf)): 
-        print(n)
-        gdf[proba_cols_rf[n]].iloc[gdf_test.index] = pred_proba_rf[:,n]
-    for n in np.arange(len(proba_cols_xgb)): 
-        print(n)
-        gdf[proba_cols_xgb[n]].iloc[gdf_test.index] = pred_proba_xgb[:,n]
-    
+        # select columns
+        probacols = [c for c in proba_cols if m in c]
+        # add predictions for all classes
+        for n in np.arange(len(probacols)): 
+            print(n)
+            gdf[probacols[n]].iloc[gdf_test.index] = pred_proba[:,n]
+        
     # predicted value to gdf
     gdf['test_fold'].iloc[gdf_test.index] = f  
 
 # save
 #gdf['proba_RF'] = gdf['proba_RF'].astype(float)
-gdf[proba_cols_rf] = gdf[proba_cols_rf].astype(float)
+gdf[proba_cols] = gdf[proba_cols].astype(float)
 
-gdf_out = fp_pts.split('.')[0] + 'img-pca-filt-bathy-class_preds.gpkg'
+gdf_out = os.path.join(os.path.dirname(fp_pts), os.path.basename(fp_pts).split('_')[0] + '_preds.gpkg') # img-pca-filt-bathy-class
 gdf.to_file(gdf_out, engine='pyogrio')
 
-# TODO plots?
-# plot overall accuracies
-fig, ax = plt.subplots()
-ax.boxplot(df_acc)
-ax.set_xticklabels(['RF', 'XGB'])
-plt.suptitle('10-fold CV Overall accuracies')
-plt.show()
-
-# fit all data
-rf.fit(X, y)
-bst.fit(X, y)
-# save model
+# model dir
 modeldir = os.path.join(os.path.dirname(os.path.dirname(fp)), 'model')
 if os.path.isdir(modeldir) == False:
     os.mkdir(modeldir)
-rf_out = os.path.join(modeldir, 'WV2_obia.sav') #TODO automatize filename creation
-pickle.dump(rf, open(rf_out, 'wb'))
+
+# plot overall accuracies
+figpath = os.path.join(modeldir, 'ML_OA_accuracies.png')
+fig, ax = plt.subplots()
+ax.boxplot(df_acc)
+ax.set_xticklabels(['RF', 'SVM', 'XGB'])
+plt.suptitle('10-fold CV Overall accuracies')
+plt.savefig(figpath, dpi=150)
+plt.show()
+
+for m in models:
+    clf = models[m]['model']
+    # fit all data
+    clf.fit(X, y)
+
+    clf_out = os.path.join(modeldir, m + '_obia.sav') #TODO automatize filename creation
+    pickle.dump(clf, open(clf_out, 'wb'))
 
 # LS1Finland_velmu2022_img-pca-filt-class_RF_obia_px.sav
 # ----------------------------------------------------------------------- #
 # TODO consider moving layer prediction to separate script
 # TODO read model
-# create layer with Bands and PCA for prediction
+
 fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/S2_LSxGreece_10m_20230828_v101_3035_clip_bands.tif'
 fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2a_20220812_v1_3035.tif'
 fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/S2_LS3Norway_B_10m_20170721_v1_clip.tif'
+
+# paths for rasters
 fp_dir = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/tiles'
 fp_pcadir = os.path.join(os.path.dirname(fp_dir),'pca')
 fp_filtdir = os.path.join(os.path.dirname(fp_dir), 'filters')
 fp_bathydir = os.path.join(os.path.dirname(fp_dir), 'SDB')
+# model filepath
+fp_model = os.path.join(os.path.dirname(fp_dir), 'model', 'XGB_obia.sav')
 
 #sansibar
 fp_tile = '/mnt/d/users/e1008409/MK/sansibar/Sansibar_WV2_25_9_2016/tiles/01_.tif'
@@ -299,8 +280,9 @@ for tileid in tiles:
     fp_bathy = glob.glob(os.path.join(fp_bathydir, '*' + tileid + '.tif'))[0]
     
     
+    
     with rio.open(fp_tile) as src:
-        img = src.read()
+        img = src.read((1,2,3,4,5,8))
         meta = src.meta
     # pca
     with rio.open(fp_pca) as src:
@@ -309,13 +291,13 @@ for tileid in tiles:
         filt = src.read()
     with rio.open(fp_bathy) as src:
         bathy = src.read()
-
-        
+#    bathy = np.pad(bathy[0], (0,1), 'edge')
+#    bathy = np.expand_dims(bathy, axis=0)        
     # create nodata mask
     nodatamask = np.where((img[2] == meta['nodata']) | (np.isnan(img[2])), 0, 1)
     
     # read model 
-    #rf = pickle.load(open(rf_out, 'rb'))
+    clf = pickle.load(open(fp_model, 'rb'))
     
     # transpose and stack (if using other than image bands)
     img = img.transpose(1,2,0)
@@ -359,7 +341,7 @@ for tileid in tiles:
     j = 1
     for i in split_array: # NOTE: parallelize
         #prediction = rf.predict(i)
-        prediction = bst.predict(i)
+        prediction = clf.predict(i)
         #prediction = clf.predict(i)
         preds.append(prediction)
         #predproba = rf.predict_proba(i)
@@ -379,7 +361,7 @@ for tileid in tiles:
     outdir = os.path.join(os.path.dirname(fp_dir), 'classification')
     if os.path.isdir(outdir) == False:
         os.mkdir(outdir)
-    outfile = os.path.join(outdir, os.path.basename(fp_tile).split('.')[0] + 'obia_XGB_segvals4.tif')
+    outfile = os.path.join(outdir, os.path.basename(fp_tile).split('.')[0] + '_' + os.path.basename(fp_model).split('.sav')[0] + '.tif')
     # update metadata
     upmeta = meta.copy()
     upmeta.update(dtype='uint8',
