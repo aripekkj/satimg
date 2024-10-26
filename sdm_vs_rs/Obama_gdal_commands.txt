@@ -1,0 +1,44 @@
+gdalwarp -s_srs EPSG:4326 -t_srs EPSG:3035 -cutline ranta10_selkameri_south_3035.gpkg -dstnodata 0 -tr 10 10 -co COMPRESS=DEFLATE -ot Float32 S2_LS1_20180715_v1.01.tif S2_LS1_20180715_v101_3035_clip.tif
+
+
+gdalwarp -s_srs EPSG:4326 -t_srs EPSG:3035 -cutline ROI_3035.gpkg -dstnodata 0 -tr 2 2 -co COMPRESS=DEFLATE -ot Float32 WorldView2_2014_08_14_09_26_30_L2R_v1.01.tif WorldView2_2014_08_14_09_26_30_L2R_v101_3035.tif
+
+
+# build virtual raster
+gdalbuildvrt -tr 10 10 -input_file_list files.txt mosaic.vrt
+# add overviews to vrt
+gdaladdo -r cubic mosaic.vrt
+
+# blacksea bathy
+gdalwarp -s_srs EPSG:32635 -t_srs EPSG:3035 -srcnodata "-32767" -dstnodata 0 -tr 10 10 -r bilinear -co COMPRESS=DEFLATE -ot Float32 Aheloy_Ravda_Nesebar-BTM-15m.tif Aheloy_Ravda_Nesebar-BTM-10m_bilinear_resample.tif 
+
+# Netherlands bathy
+gdalwarp -s_srs EPSG:4326 -t_srs EPSG:3035 -srcnodata "-3.4e+38" -dstnodata 0 -tr 10 10 -r bilinear -co COMPRESS=DEFLATE -ot Float32 bathymetry.tif bathymetry_3035_10m_bilinear_resample.tif 
+# Netherlands low tide image 2.6.2017, 2017-10-15
+# Kreikka pilvetön 2022-06-24
+
+# Fix Denmark tile A extent (extent covers whole kattegat instead of tile A)
+LS2a left=4286440.0, bottom=3511480.0, right=4503170.0, top=3849590.0)
+LS2b left=4336611.528196542, bottom=3677396.627647551, right=4414171.528196542, top=3850316.627647551)
+LS2c left=4414164.390082317, bottom=3523804.5229059486, right=4506954.390082317, top=3680984.5229059486)
+LS2d left=4412781.415444474, bottom=3678351.2721642964, right=4434551.415444474, top=3742931.2721642964)
+# new extent
+LS2a left=4286440.0, bottom=3511480.0, right=4414164.390082317, top=3677396.627647551)
+
+gdalwarp -s_srs EPSG:3035 -t_srs EPSG:3035 -te 4286440.0 3511480.0 4414164.390082317 3677396.627647551 -srcnodata 1e+9 -dstnodata 0 -tr 10 10 -co compress=DEFLATE S2_LS2a_20220812_v1_3035.tif S2_LS2a_20220812_v1_3035_update.tif
+
+
+
+# get coastline from QuickOSM QGIS plugin
+-select water/coastline
+-coastline polygons to lines
+-merge with lines
+- may require ordering line segments
+-polygonize
+
+
+# sansibar
+gdalwarp -s_srs EPSG:32737 -t_srs EPSG:32737 -cutline Opetusdatat/Mnemba_aoi.gpkg -crop_to_cutline -co COMPRESS=DEFLATE -dstnodata 0 planet/Mnemba_2020-2024_psscene_analytic_8b_sr_udm2/PSScene/20240812_3B_AnalyticMS_SR_8b_merge.tif planet/Mnemba_2020-2024_psscene_analytic_8b_sr_udm2/PSScene/20240812_3B_AnalyticMS_SR_8b_merge_clip.tif 
+
+
+
