@@ -43,11 +43,30 @@ fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2b_20220812_v1_
 fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Eelgrass_2018-2023/Eelgrass_Kattegat__multiclass_2018_32632.gpkg'
 fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Data_layers/Bathymetry_Composite_cleaned_0-10m_depth_4326.gpkg'
 
+# Black Sea
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/S2_LSxBLK_20200313_v1_3035.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/Black_Sea_habitat_data_3035.gpkg'
+fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/Extent.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/BG0000574-rasters/Aheloy_Ravda_Nesebar-BTM-10m_bilinear_resample_up_ext.tif'
+
+# Greece
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/S2_LSxGreece_10m_20230828_v101_3035_clip_bands.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_habitat_data.gpkg'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_habitat_data_3035.gpkg'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_train_pts_digitize.gpkg'
 fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/ROI_3035.gpkg'
 fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/SDB/S2_LSxGreece_10m_B2B3_logbr_LinRegressor_SDB.tif'
 
+# Norway
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/S2_LS3Norway_B_10m_20170721_v1_clip.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/Norway_habitat_data_3035.gpkg'
+fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/MoreRomsdal_sea_noclouds.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/SDB/S2_LS3Norway_B_B2B3_logbr_LinRegressor_SDB.tif'
+
+# Netherlands
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/S2/20171015/S2_LSxNL_20171015_v101_rrs_clip.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/Wadden_Sea_habitat_data.gpkg'
+fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/WaddenSea_roi_3035.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/Data Layers/bathymetry_3035_10m_bilinear_resample_20171015.tif'
 
 def computeTileBounds(raster_fp, tilesize, tilewidth_no, tileheight_no):
     # bounds from raster
@@ -180,7 +199,8 @@ def maskAndSave(data_array, tiledir):
     # save
     if os.path.isdir(tiledir) == False:
         os.mkdir(tiledir)
-    fp_out = os.path.join(tiledir, os.path.basename(fp).split('_')[1] + '_' + str(i) + '_' + str(j) + '.tif')
+    splitbase = os.path.basename(fp).split('_')
+    fp_out = os.path.join(tiledir, splitbase[1] + '_' + splitbase[2] + '_' + str(i) + '_' + str(j) + '.tif')
     xds_c.rio.to_raster(fp_out, compress='LZW')
     return xds_c, fp_out
 
@@ -209,15 +229,12 @@ gdf_out = gpd.GeoDataFrame()
 cols = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10']
 pcacols = ['pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7', 'pca8', 'pca9', 'pca10']
 
-
-# 
+# read
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
 print(gdf.hab_class.unique())
 
-#gdf['new_class'][gdf.new_class == 5] = 1
-#gdf['new_class'][gdf.new_class == 4] = 3
-gdf = gdf.rename(columns={'new_class': 'habitat'})
-#gdf['hab_class'] = np.where(gdf.depth <= -10, 'deep_water', gdf.hab_class) 
+#gdf = gdf.rename(columns={'new_class': 'habitat'})
+#gdf['hab_class'] = np.where(gdf.depth >= 8, 'deep_water', gdf.hab_class) # define deep water if necessary
 # label encode strings class
 le = LabelEncoder()
 le.fit(gdf.hab_class.unique())
@@ -228,7 +245,7 @@ gdf['point_id'] = gdf.index + 1
 print(gdf.new_class.unique())
 print(gdf[['hab_class', 'new_class']])
 # save
-fp_pts_encoded = fp_pts.split('.gpkg')[0] + '3035_encoded.gpkg'
+fp_pts_encoded = fp_pts.split('.gpkg')[0] + '_encoded.gpkg'
 gdf = gdf.to_crs(3035)
 gdf.to_file(fp_pts_encoded, driver='GPKG', engine='pyogrio')
 # update filepath
@@ -311,45 +328,6 @@ for i in fw:
             dst.write(segments.astype(segmeta['dtype']))
         
 
-        # ---------------------
-        # feature extractor for RF
-        from keras.models import Sequential
-        from keras.layers import Conv2D
-        activation = 'relu'
-
-        #test = xds_c[0:4,1024:1280,768:1024].values # select subpatch for testing
-#        plt.imshow(test[2])
-        #TODO use only visual light wavelengths in creating filters
-        shape = xds_c.shape
-        N=3
-        nfilt = 32
-        filtcols = ['filt_' + str(f+1) for f in np.arange(0,nfilt)]
-        feat_extractor = Sequential()
-        feat_extractor.add(Conv2D(nfilt, N, activation=activation, padding='same', input_shape=(shape[1], shape[2], 3))) #shape[0]
-        feat_extractor.add(Conv2D(nfilt, N, activation=activation, padding='same', kernel_initializer='he_normal'))
- #       feat_extractor.add(MaxPooling2D())
- #       feat_extractor.add(Conv2D(32, N, activation=activation, padding='same', kernel_initializer='he_normal'))
-        
-        t = np.transpose(xds_c.values[1:4], (1,2,0)) # select visual bands
-        t = np.expand_dims(t, axis=0)
-        filt = feat_extractor.predict(t)
-        filt = np.squeeze(filt)
-#        plt.imshow(tX[:,:,9])
-        
-        # save filters
-        filt_dir = os.path.join(basedir, 'filters')
-        if os.path.isdir(filt_dir) == False:
-            os.mkdir(filt_dir)
-        filt_out = os.path.join(filt_dir, 'filters_' + str(nfilt) + '_N' + str(N) + '_' + str(i) + '_' + str(j) + '.tif')
-        fmeta = segmeta.copy()
-        fmeta.update(dtype='float32',
-                     nodata=np.nan,
-                     count=nfilt
-                     )        
-        filt = np.transpose(filt, (2,0,1))
-        with rio.open(filt_out, 'w', **fmeta, compress='LZW') as dst:
-            dst.write(filt.astype(fmeta['dtype']))
-
         # select clip area from bathymetry raster
         bathy = clipToCRS(clip_bounds, fp_bathy)        
         bathy_c, bathy_c_path = maskAndSave(bathy, os.path.dirname(fp_bathy)) # save tile
@@ -374,10 +352,6 @@ for i in fw:
         # sample PCA pixel values
         gdf = sampleRasterToGDF(pcaout, gdf)
         gdf[pcacols] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
-        gdf = gdf.drop('sampled', axis=1)
-        # sample filters pixel values
-        gdf = sampleRasterToGDF(filt_out, gdf)
-        gdf[filtcols] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
         gdf = gdf.drop('sampled', axis=1)
         # sample bathy pixel values
         gdf = sampleRasterToGDF(bathy_c_path, gdf)
@@ -435,9 +409,12 @@ for i in fw:
                     # find most common value
                     c = Counter(sel.new_class)
                     val, count = c.most_common()[0]
-                    # if equal count of different values, get class from row with highest vegetation cover
+                    # select point index to keep if multiple pts within segment
                     if count == 1:
-                        sel_id = sel['point_id'][sel.savcov == sel.savcov.max()].index[0] # select id where sav coverage is highest, DK Coverage_pct
+                        # if equal count of different values, get class from row with highest vegetation cover
+                        #sel_id = sel['point_id'][sel.savcov == sel.savcov.max()].index[0] # select id where sav coverage is highest, DK Coverage_pct
+                        # random select
+                        sel_id = sel['point_id'][sel.new_class == np.random.choice(list(c.keys()))].index[0]
                         droplist = sel.index[sel.index != sel_id] # indices to drop
                         # drop from gdf
                         gdf = gdf.drop(droplist)
@@ -459,7 +436,6 @@ for i in fw:
         img_re = xds_c[0:xds_c.band.shape[0]].values
         img_re = img_re.reshape((img_re.shape[0],-1)).transpose((1,0))
         pca_re = pca.reshape((pca.shape[0],-1)).transpose((1,0))
-        filt_re = filt.reshape((filt.shape[0],-1)).transpose((1,0))
         bathy_re = bathy_c[0:bathy_c.band.shape[0]].values
         bathy_re = bathy_re.reshape((bathy_re.shape[0],-1)).transpose((1,0))
         
@@ -471,7 +447,6 @@ for i in fw:
             #pxlist = [vals.tolist() for vals in pxvals]
             pcavals = pca_re[seg_re == sg_id] # get pca pixels
             #pcalist = [vals.tolist() for vals in pcavals]
-            filtvals = filt_re[seg_re == sg_id] # get filter layers pixels
             bathyvals = bathy_re[seg_re == sg_id] # get bathy layers pixels
             new_class = int(gdf.new_class[gdf.segments == sg_id].values[0]) # get habitat class
             point_id = gdf.point_id[gdf.segments == sg_id].values[0] # get point id, DK point_id
@@ -482,7 +457,6 @@ for i in fw:
             #                   new_class=new_class)
             segresult = pd.DataFrame(pxvals, columns=cols)
             segresult[pcacols] = pcavals
-            segresult[filtcols] = filtvals
             segresult['bathymetry'] = bathyvals
             segresult['new_class'] = new_class
             segresult['segment_id'] = sg_id
@@ -499,10 +473,10 @@ os.remove(clip_out)
 segvals_dir = os.path.join(segdir, 'segvals')
 if os.path.isdir(segvals_dir) == False:
     os.mkdir(segvals_dir)
-segvals_out = os.path.join(segvals_dir, prefix + '_segvals.csv')
+segvals_out = os.path.join(segvals_dir, prefix + '_segvals2.csv')
 result.to_csv(segvals_out, sep=';') 
 # save geodataframe
-gdf_outfile = os.path.join(os.path.dirname(fp_pts), fp_pts.split('.')[0] + prefix + '_sampled.gpkg')
+gdf_outfile = os.path.join(os.path.dirname(fp_pts), fp_pts.split('.')[0] + '_2' + prefix + '.gpkg')
 gdf_out.to_file(gdf_outfile, driver='GPKG', engine='pyogrio')
 #with open(segvals_out, 'w') as of:
 #    json.dump(result, of, indent=4)
