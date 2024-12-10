@@ -37,7 +37,8 @@ fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_habitat_d
 fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/Black_Sea_habitat_data_ml_encoded_LSxBLK_20200313.gpkg'
 
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
-habitats = gdf.hab_class_ml.unique().tolist()
+print(gdf[['hab_class_ml', 'int_class']].groupby('hab_class_ml').mean())
+habitats = sorted(gdf.hab_class_ml.unique().tolist())
 # create band descriptions
 descriptions = [i + ' prob' for i in habitats]
 
@@ -143,7 +144,7 @@ def predict(tileid, basedir, model_fp, band_descriptions, use_bathymetry):
 #    plt.imshow(nodatamask)
     predicted = np.where(nodatamask == 0, np.nan, predicted)
     # outfile
-    outdir = os.path.join(os.path.dirname(basedir), 'classification')
+    outdir = os.path.join(basedir, 'classification')
     if os.path.isdir(outdir) == False:
         os.mkdir(outdir)
     outfile = os.path.join(outdir, os.path.basename(fp_tile).split('.')[0] + '_' + os.path.basename(model_fp).split('.sav')[0] + '_proba.tif')
