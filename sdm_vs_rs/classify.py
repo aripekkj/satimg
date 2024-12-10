@@ -161,7 +161,7 @@ def predict(tileid, basedir, model_fp, band_descriptions, use_bathymetry):
 delayed_funcs = []
 for t in tiles:
     for m in models:
-        pred = delayed(predict(t, basedir, m, descriptions))
+        pred = delayed(predict(t, basedir, m, descriptions, use_bathymetry))
         delayed_funcs.append(pred)    
 # compute
 compute(delayed_funcs)
