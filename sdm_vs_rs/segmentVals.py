@@ -16,6 +16,7 @@ TODO: Consider adding another segmentation iteration where several points within
 import sys
 import os
 import time
+import math
 import numpy as np
 import scipy as sc
 import pandas as pd
@@ -33,49 +34,61 @@ from dask import delayed
 from dask import compute
 from collections import Counter
 
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/S2_LS1_20180715_v101_3035_clip.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/LG_AHV_aineistot_2024-02-23_selkameri_south_3035_classes.gpkg'
-fp_pts = '/mnt/d/users/e1008409/MK/Velmu-aineisto/sdm_vs_rs/velmudata_07112022_selkameri_south_bounds_edit.gpkg'
-fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/ranta10_selkameri_south_3035.gpkg'
+# set whether to check for duplicates within segments
+check_duplicates = True
+use_bathymetry = True
 
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2b_20220812_v1_3035.tif'
-#fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Macroalgae_2018-2023/KattegatM_habitat_data.gpkg'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Eelgrass_2018-2023/Eelgrass_Kattegat__multiclass_2018_32632.gpkg'
-fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Data_layers/Bathymetry_Composite_cleaned_0-10m_depth_4326.gpkg'
+fp = sys.argv[1]
+fp_pts = sys.argv[2]
+if use_bathymetry == True:
+    fp_bathy = sys.argv[3]
+
+# Finland
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/S2_LS1_20180715_v101_3035_clip.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/Finland_habitat_data_ml_5m_env_sampled_encoded_LS1_20180715.gpkg'
+# Finland VHR
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland_VHR/WorldView2_2014_09_08_10_36_23_L2W_Rrs_3035.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland_VHR/FinlandVHR_habitat_data_ml_5m_env_sampled_encoded_LS1_20180715.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland_VHR/bathymetry/bathymetry_2m_3035.tif'
+
+# Denmark
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2c_20220812_v101_3035.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/Kattegat_habitat_data_encoded_img_sampled_edit.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/bathymetry/bathy_resample_c_10m_3035.tif'
+# Estonia
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Estonia/S2_LS1Est_2015_merge.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Estonia/Estonia_habitat_data_hab_class_3035_edit.gpkg'
+fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Estonia/aoi_3035.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Estonia/bathymetry/depth_mean_bilinear_resample_10m_3035.tif'
 
 # Black Sea
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/S2_LSxBLK_20200313_v1_3035.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/Black_Sea_habitat_data_3035.gpkg'
-fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/Extent.gpkg'
-fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/BG0000574-rasters/Aheloy_Ravda_Nesebar-BTM-10m_bilinear_resample_up_ext.tif'
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/S2_LSxBLK_20200313_v1_3035_masked.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/Black_Sea_habitat_data_ml.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/bathymetry/bathymetry_res_10m_3035.tif'
 
 # Greece
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/S2_LSxGreece_10m_20230828_v101_3035_clip_bands.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_habitat_data_3035.gpkg'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_train_pts_digitize.gpkg'
-fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/ROI_3035.gpkg'
-fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/SDB/S2_LSxGreece_10m_B2B3_logbr_LinRegressor_SDB.tif'
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/S2_LSxGreece_10m_20230828_v101_3035_clip_bands_masked.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_habitat_data_ml.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/bathymetry/bathymetry_10m_3035.tif'
 
 # Norway
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/S2_LS3Norway_B_10m_20170721_v1_clip.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/Norway_habitat_data_3035.gpkg'
-fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/MoreRomsdal_sea_noclouds.gpkg'
-fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/SDB/S2_LS3Norway_B_B2B3_logbr_LinRegressor_SDB.tif'
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/S2_LS3Norway_C_10m_20170721_v1_clip_ndwimasked.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/Norway_habitat_data_ml_encoded.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/bathymetry/Emodnet_depth_10m_3035.tif'
 
 # Netherlands
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/S2/20171015/S2_LSxNL_20171015_v101_rrs_clip.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/Wadden_Sea_habitat_data.gpkg'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/Wadden_Sea_habitat_data_ml.gpkg'
 fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/WaddenSea_roi_3035.gpkg'
-fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/Data Layers/bathymetry_3035_10m_bilinear_resample_20171015.tif'
 
 def computeTileBounds(raster_fp, tilesize, tilewidth_no, tileheight_no):
     # bounds from raster
-    with rio.open(fp) as src:
+    with rio.open(raster_fp) as src:
         meta = src.meta
     fwm = meta['width'] % tilesize # leftover if not full tile
     fhm = meta['height'] % tilesize # leftover if not full tile
     bbox_maxx = meta['transform'][2] + meta['transform'][0] * meta['width'] 
-    bbox_miny = meta['transform'][5] - meta['transform'][4] * meta['height'] 
+    bbox_miny = meta['transform'][5] + meta['transform'][4] * meta['height'] 
 
     # metainfo has top left corner and cell sizes so we can compute other corners by cell size and width
     minx = meta['transform'][2] + meta['transform'][0] * tilesize * tilewidth_no
@@ -86,10 +99,10 @@ def computeTileBounds(raster_fp, tilesize, tilewidth_no, tileheight_no):
     # if new bounds exceed original, use specific tilesize
     if maxx > bbox_maxx:
         maxx = minx + fwm * meta['transform'][0]
-    if miny > bbox_miny:
+    if miny < bbox_miny:
         miny = miny + fhm * meta['transform'][4]
-    else:
-        bounds = (minx, miny, maxx, maxy)
+    
+    bounds = (minx, miny, maxx, maxy)
     return bounds
    
 def computePCA(img):
@@ -107,7 +120,7 @@ def computePCA(img):
     # sklearn PCA
     pca = PCA()
     pca.fit(test)  
-        # cumulative variance
+    # cumulative variance
     var_cumu = np.cumsum(pca.explained_variance_ratio_)*100
     # apply pca
     pca_out = pca.transform(flat_data)
@@ -120,19 +133,19 @@ def computePCA(img):
 
 def sampleRaster(raster_fp, geodataframe_fp):
     # read points
-    gdf = gpd.read_file(geodataframe_fp, engine='pyogrio')
+    geodf = gpd.read_file(geodataframe_fp, engine='pyogrio')
     # sample coords
     with rio.open(raster_fp) as src:
         meta = src.meta
         crs = src.crs.to_epsg()
         # check crs
-        if gdf.crs != src.crs:
-            gdf = gdf.to_crs(src.crs)
+        if geodf.crs != src.crs:
+            geodf = geodf.to_crs(src.crs)
         # get point coords
-        coords = [(x,y) for x,y in zip(gdf.geometry.x, gdf.geometry.y)]
+        coords = [(x,y) for x,y in zip(geodf.geometry.x, geodf.geometry.y)]
         # sample
-        gdf['sampled'] = [x for x in src.sample(coords)]
-    return gdf
+        geodf['sampled'] = [x for x in src.sample(coords)]
+    return geodf
 
 def sampleRasterToGDF(raster_fp, geodataframe):
     # read points
@@ -152,12 +165,12 @@ def sampleRasterToGDF(raster_fp, geodataframe):
 
 def clipToCRS(clip_bounds, raster_fp):
     xds = rxr.open_rasterio(raster_fp)
-    poly = gpd.read_file(fp_poly, engine='pyogrio')
+    #poly = gpd.read_file(fp_poly, engine='pyogrio')
 
     # check poly crs
-    if poly.crs != xds.rio.crs:
-        poly = poly.to_crs(xds.rio.crs)    
-# clip by bounds
+    #if poly.crs != xds.rio.crs:
+    #    poly = poly.to_crs(xds.rio.crs)    
+    # clip by bounds
     xds_c = xds.rio.clip_box(
         minx=clip_bounds[0],
         miny=clip_bounds[1],
@@ -165,19 +178,19 @@ def clipToCRS(clip_bounds, raster_fp):
         maxy=clip_bounds[3],
         crs=xds.rio.crs)
     # clip with geometry
-    xds_c = xds_c.rio.clip(poly.geometry.values)
+    #xds_c = xds_c.rio.clip(poly.geometry.values)
     # reproject
     xds_c = xds_c.rio.reproject("EPSG:3035", resolution=10)             
     return xds_c
 
-def clipGDF(fp_pts, bounds):
-    gdf = gpd.read_file(fp_pts,engine='pyogrio')
+def clipGDF(fp_points, bounds):
+    geodf = gpd.read_file(fp_points,engine='pyogrio')
     polygon = box(bounds[0], bounds[1], bounds[2], bounds[3])
     # clip
-    gdf = gdf.clip(polygon)
-    return gdf
+    geodf = geodf.clip(polygon)
+    return geodf
 
-def maskAndSave(data_array, tiledir):
+def maskAndSave(data_array, tiledir, sfx_w, sfx_h):
     # change nodata
 #    xds_c = np.where(data_array.values == data_array._FillValue, np.nan, data_array.values)
     xds_c = xr.where(data_array == data_array._FillValue, np.nan, data_array)
@@ -200,9 +213,10 @@ def maskAndSave(data_array, tiledir):
     if os.path.isdir(tiledir) == False:
         os.mkdir(tiledir)
     splitbase = os.path.basename(fp).split('_')
-    fp_out = os.path.join(tiledir, splitbase[1] + '_' + splitbase[2] + '_' + str(i) + '_' + str(j) + '.tif')
+    fp_out = os.path.join(tiledir, splitbase[1] + '_' + splitbase[2] + '_' + str(sfx_w) + '_' + str(sfx_h) + '.tif')
     xds_c.rio.to_raster(fp_out, compress='LZW')
     return xds_c, fp_out
+
 
 basedir = os.path.dirname(fp)
 tiledir = os.path.join(basedir, 'tiles')
@@ -215,8 +229,9 @@ xds = rxr.open_rasterio(fp)
 with rio.open(fp) as src:
     meta = src.meta
 
+max_dim = max(xds.shape)
 # set tile size
-tilesize = 3000
+tilesize = math.ceil(max_dim/2)
 # compute bounds for tiles
 fw = np.arange(0, int(meta['width'] / tilesize)+1, 1) # how many full tiles fits in width
 fh = np.arange(0, int(meta['height'] / tilesize)+1, 1) # how many full tiles fits in height
@@ -228,44 +243,49 @@ result = pd.DataFrame()
 gdf_out = gpd.GeoDataFrame()
 cols = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10']
 pcacols = ['pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7', 'pca8', 'pca9', 'pca10']
+# VHR
+cols = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7']
+pcacols = ['pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7']
+
 
 # read
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
-print(gdf.hab_class.unique())
+print(gdf.hab_class_ml.unique())
 
-#gdf = gdf.rename(columns={'new_class': 'habitat'})
-#gdf['hab_class'] = np.where(gdf.depth >= 8, 'deep_water', gdf.hab_class) # define deep water if necessary
+prefix_split = os.path.basename(fp).split('_')
+prefix = prefix_split[1] + '_' + prefix_split[2]
+
+#TODO move to another script 
 # label encode strings class
-le = LabelEncoder()
-le.fit(gdf.hab_class.unique())
-gdf['new_class'] = le.transform(gdf.hab_class)
-gdf['new_class'] = gdf['new_class'] + 1 # start unique classes with 1
+#le = LabelEncoder()
+#le.fit(gdf.hab_class_ml.unique())
+#gdf['int_class'] = le.transform(gdf.hab_class_ml)
+#gdf['int_class'] = gdf['int_class'] + 1 # start unique classes with 1
 # create point id column
-gdf['point_id'] = gdf.index + 1
-print(gdf.new_class.unique())
-print(gdf[['hab_class', 'new_class']])
+#gdf['point_id'] = gdf.index + 1
+#print(gdf.int_class.unique())
+#print(gdf[['hab_class_ml', 'int_class']])
 # save
-fp_pts_encoded = fp_pts.split('.gpkg')[0] + '_encoded.gpkg'
-gdf = gdf.to_crs(3035)
-gdf.to_file(fp_pts_encoded, driver='GPKG', engine='pyogrio')
-# update filepath
-fp_pts = fp_pts_encoded
+#fp_pts_encoded = fp_pts.split('.gpkg')[0] + '_encoded.gpkg'
+#if gdf.crs != 3035: # check CRS
+#    gdf = gdf.to_crs(3035)
+#gdf.to_file(fp_pts_encoded, driver='GPKG', engine='pyogrio')
 
-# set whether to check for duplicates
-check_duplicates = True
 
 # create segmentation patches
 for i in fw:   
     for j in fh:
-
+        print(i, j)
         clip_bounds = computeTileBounds(fp, tilesize, i, j)    
         try:        
             data = clipToCRS(clip_bounds, fp)
         except:
+            print('No data in bounds')
             continue
-        xds_c, xds_c_path = maskAndSave(data, tiledir)
+        xds_c, xds_c_path = maskAndSave(data, tiledir, i, j)
         # test that array is not empty
         if np.isnan(xds_c.values).all() == True:
+            print('All nodata')
             continue
         
         # compute pca
@@ -278,8 +298,7 @@ for i in fw:
                        height=pca.shape[1],
                        width=pca.shape[2],
                        transform=xds_c.rio.transform())        
-        prefix_split = os.path.basename(fp).split('_')
-        prefix = prefix_split[1] + '_' + prefix_split[2]
+        
         pcadir = os.path.join(basedir, 'pca')
         if os.path.isdir(pcadir) == False:
             os.mkdir(pcadir)
@@ -287,15 +306,15 @@ for i in fw:
         with rio.open(pcaout, 'w', **pcameta, compress='LZW') as dst:
             dst.write(pca.astype(pcameta['dtype'])) 
         # save pcavar_df
-        df_pcavar.to_csv(os.path.join(pcadir, 'pca_var.csv'))
+        df_pcavar.to_csv(os.path.join(pcadir, prefix + 'pca_var.csv'))
         
         # image segmentation parameters 
         n = 5
         sig = np.nanstd(xds.values[1:4,:,:]) #0.0005
-        s = 0.30
+        s = 0.50
         # felzenswalb segmentation 
         start = time.time()
-        segments = felzenszwalb(xds_c[0:xds_c.band.shape[0]].values, scale=s, sigma=sig, min_size=n, channel_axis=0)
+        segments = felzenszwalb(xds_c[1:4].values, scale=s, sigma=sig, min_size=n, channel_axis=0) # use 10m visible bands, 0:xds_c.band.shape[0] <- this would use all bands
 #        segments = felzenszwalb(pca, scale=s, sigma=sig, min_size=n, channel_axis=0) # test if segmenting PCA makes different result - not significantly
         end = time.time()
         elapsed = end - start
@@ -321,16 +340,20 @@ for i in fw:
         segdir = os.path.join(basedir, 'segmentation')
         if os.path.isdir(segdir) == False:
             os.mkdir(segdir)
-        clip_out = os.path.join(segdir, prefix + str(tilesize) + '_n' + str(n) + '_sig' + str(sig).split('.')[1] + '_s' + str(s).split('.')[1] + str(i) + '_' + str(j) + '.tif') 
+        clip_out = os.path.join(segdir, prefix + str(tilesize) + '_n' + str(n) + '_s' + str(s).split('.')[1] + str(i) + '_' + str(j) + '.tif') 
 
         # save
         with rio.open(clip_out, 'w', **segmeta, compress='LZW') as dst:
             dst.write(segments.astype(segmeta['dtype']))
         
-
-        # select clip area from bathymetry raster
-        bathy = clipToCRS(clip_bounds, fp_bathy)        
-        bathy_c, bathy_c_path = maskAndSave(bathy, os.path.dirname(fp_bathy)) # save tile
+        if use_bathymetry == True:
+            # select clip area from bathymetry raster
+            bathy = clipToCRS(clip_bounds, fp_bathy)
+            if bathy.shape[1] > data.shape[1]:
+                bathy = bathy[:,0:data.shape[1],:]
+            if bathy.shape[2] > data.shape[2]:
+                bathy = bathy[:,:,0:data.shape[2]]    
+            bathy_c, bathy_c_path = maskAndSave(bathy, os.path.dirname(fp_bathy)) # save tile
 
         # =============================================================================        
         # finer scale segmentation where is field data     
@@ -353,10 +376,11 @@ for i in fw:
         gdf = sampleRasterToGDF(pcaout, gdf)
         gdf[pcacols] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
         gdf = gdf.drop('sampled', axis=1)
-        # sample bathy pixel values
-        gdf = sampleRasterToGDF(bathy_c_path, gdf)
-        gdf['bathymetry'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
-        gdf = gdf.drop('sampled', axis=1)
+        if use_bathymetry == True:
+            # sample bathy pixel values
+            gdf = sampleRasterToGDF(bathy_c_path, gdf)
+            gdf['bathymetry'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
+            gdf = gdf.drop('sampled', axis=1)
         
         # get segment ids where is field data
         segments_ids = gdf.segments[gdf.segments > 0].unique()
@@ -369,10 +393,10 @@ for i in fw:
         # mask
         #img = np.where(nodatamask == True, np.nan, img)
         # image segmentation parameters 
-        n2 = 5
+        n2 = 3
         s2 = s/2
         start = time.time()
-        segments2 = felzenszwalb(img, scale=s2, sigma=sig, min_size=n2, channel_axis=0)
+        segments2 = felzenszwalb(img[1:4], scale=s2, sigma=sig, min_size=n2, channel_axis=0)
         end = time.time()
         elapsed = end - start
         print('Time elapsed: %.2f' % elapsed, 'seconds')
@@ -405,29 +429,30 @@ for i in fw:
                 sel = gdf[gdf.duplicate_id == vi]
             
                 if len(sel) > 1:
-            #        print(sel[['ObservationsstedId', 'new_class']])
+            #        print(sel[['ObservationsstedId', 'int_class']])
                     # find most common value
-                    c = Counter(sel.new_class)
+                    c = Counter(sel.int_class)
                     val, count = c.most_common()[0]
                     # select point index to keep if multiple pts within segment
                     if count == 1:
                         # if equal count of different values, get class from row with highest vegetation cover
                         #sel_id = sel['point_id'][sel.savcov == sel.savcov.max()].index[0] # select id where sav coverage is highest, DK Coverage_pct
                         # random select
-                        sel_id = sel['point_id'][sel.new_class == np.random.choice(list(c.keys()))].index[0]
+                        sel_id = sel['point_id'][sel.int_class == np.random.choice(list(c.keys()))].index[0]
                         droplist = sel.index[sel.index != sel_id] # indices to drop
                         # drop from gdf
                         gdf = gdf.drop(droplist)
                     else:
                         print('Majority value in', vi, 'is', val, 'with count', count)
-                        sel_id = sel['point_id'][sel.new_class == val].index[0] # keep one row with majority value, DK ObservationsstedId
+                        sel_id = sel['point_id'][sel.int_class == val].index[0] # keep one row with majority value, DK ObservationsstedId
                         droplist = sel.index[sel.index != sel_id] # indices to drop
                         # drop from gdf
                         gdf = gdf.drop(droplist)
+        
         # add geometry x and y columns
-        epsg = str(gdf.crs.to_epsg())
-        gdf['x_' + epsg] = gdf.geometry.x
-        gdf['y_' + epsg] = gdf.geometry.y
+#        epsg = str(gdf.crs.to_epsg())
+#        gdf['x_' + epsg] = gdf.geometry.x
+#        gdf['y_' + epsg] = gdf.geometry.y
         
         # =============================================================================    
         # select pixels from each segment
@@ -436,8 +461,9 @@ for i in fw:
         img_re = xds_c[0:xds_c.band.shape[0]].values
         img_re = img_re.reshape((img_re.shape[0],-1)).transpose((1,0))
         pca_re = pca.reshape((pca.shape[0],-1)).transpose((1,0))
-        bathy_re = bathy_c[0:bathy_c.band.shape[0]].values
-        bathy_re = bathy_re.reshape((bathy_re.shape[0],-1)).transpose((1,0))
+        if use_bathymetry == True:
+            bathy_re = bathy_c[0:bathy_c.band.shape[0]].values
+            bathy_re = bathy_re.reshape((bathy_re.shape[0],-1)).transpose((1,0))
         
         # pixel values to dict
         for sg_id in np.unique(gdf.segments)[1:]: # start from index 1 to skip 0 ie. nodata
@@ -447,18 +473,20 @@ for i in fw:
             #pxlist = [vals.tolist() for vals in pxvals]
             pcavals = pca_re[seg_re == sg_id] # get pca pixels
             #pcalist = [vals.tolist() for vals in pcavals]
-            bathyvals = bathy_re[seg_re == sg_id] # get bathy layers pixels
-            new_class = int(gdf.new_class[gdf.segments == sg_id].values[0]) # get habitat class
+            if use_bathymetry == True:
+                bathyvals = bathy_re[seg_re == sg_id] # get bathy layers pixels
+            int_class = int(gdf.int_class[gdf.segments == sg_id].values[0]) # get habitat class
             point_id = gdf.point_id[gdf.segments == sg_id].values[0] # get point id, DK point_id
             
             # to dict
             #result[int(point_id)] = dict(img=pxlist,
             #                   pca=pcalist,
-            #                   new_class=new_class)
+            #                   int_class=int_class)
             segresult = pd.DataFrame(pxvals, columns=cols)
             segresult[pcacols] = pcavals
-            segresult['bathymetry'] = bathyvals
-            segresult['new_class'] = new_class
+            if use_bathymetry == True:
+                segresult['bathymetry'] = bathyvals
+            segresult['int_class'] = int_class
             segresult['segment_id'] = sg_id
             segresult['point_id'] = point_id
             
@@ -466,20 +494,46 @@ for i in fw:
 
         # concat gdf
         gdf_out = pd.concat([gdf_out, gdf])
-        
+# drop duplicate column as it is not needed
+gdf_out = gdf_out.drop(['duplicate', 'duplicate_id'], axis=1)        
 # delete first segmentation file as it is temporary layer
 os.remove(clip_out)
-# save 
+# reset index
+result = result.reset_index(drop=True)
+
+#result2 = result
+#result = result2
+# check if na points exist
+traincols = cols+pcacols
+if use_bathymetry == True:
+    traincols.append('bathymetry')
+result[traincols] = result[traincols].replace('', pd.NA) # replace empty with NaN
+nan_point_ids = result['point_id'][result[traincols].isna().any(axis=1)]
+# drop rows that contain NA values
+result = result[~result.index.isin(nan_point_ids.index)]
+
+# check that point ids match in result and gdf
+if sorted(result.point_id.unique()) == sorted(gdf.point_id) == False:
+    missing_id = [p for p in result.point_id.unique() if p not in gdf.point_id]
+    # 
+    print('GeoDataFrame missing point_id', str(missing_id))
+
+
+#if len(nans) > 0:
+    # drop nans
+#    gdf_out = gdf_out[~gdf_out.index.isin(nans.index)]
+    # check na's also in segmented data
+#    result = result.loc[~result['point_id'].isin(nans.point_id.tolist())] # exclude nan segments by point id
+
+# save datatable
 segvals_dir = os.path.join(segdir, 'segvals')
 if os.path.isdir(segvals_dir) == False:
     os.mkdir(segvals_dir)
-segvals_out = os.path.join(segvals_dir, prefix + '_segvals2.csv')
+segvals_out = os.path.join(segvals_dir, prefix + '_segvals.csv')
 result.to_csv(segvals_out, sep=';') 
 # save geodataframe
-gdf_outfile = os.path.join(os.path.dirname(fp_pts), fp_pts.split('.')[0] + '_2' + prefix + '.gpkg')
+gdf_outfile = os.path.join(os.path.dirname(fp_pts), fp_pts.split('.')[0] + '_' + prefix + '.gpkg')
 gdf_out.to_file(gdf_outfile, driver='GPKG', engine='pyogrio')
-#with open(segvals_out, 'w') as of:
-#    json.dump(result, of, indent=4)
 
 
 
