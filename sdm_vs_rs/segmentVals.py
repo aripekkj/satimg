@@ -43,6 +43,11 @@ fp_pts = sys.argv[2]
 if use_bathymetry == True:
     fp_bathy = sys.argv[3]
 
+# DNASense
+fp = '/mnt/d/users/e1008409/MK/DNASense/FIN/s2_ncdf/20180715_T34_merge_nan.tif'
+fp_bathy = '/mnt/d/users/e1008409/MK/DNASense/FIN/bathymetry_nan.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/DNASense/FIN/Finland_habitat_data_ml_new_32634.gpkg'
+
 # Finland
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/S2_LS1_20180715_v101_3035_clip.tif'
 fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/Finland_habitat_data_ml_5m_env_sampled_encoded_LS1_20180715.gpkg'
@@ -180,7 +185,7 @@ def clipToCRS(clip_bounds, raster_fp):
     # clip with geometry
     #xds_c = xds_c.rio.clip(poly.geometry.values)
     # reproject
-    xds_c = xds_c.rio.reproject("EPSG:3035", resolution=10)             
+    #xds_c = xds_c.rio.reproject("EPSG:3035", resolution=10)             
     return xds_c
 
 def clipGDF(fp_points, bounds):
@@ -227,14 +232,14 @@ xds = rxr.open_rasterio(fp)
 
 # bounds from raster
 with rio.open(fp) as src:
-    meta = src.meta
+    profile = src.profile
 
 max_dim = max(xds.shape)
 # set tile size
 tilesize = math.ceil(max_dim/2)
 # compute bounds for tiles
-fw = np.arange(0, int(meta['width'] / tilesize)+1, 1) # how many full tiles fits in width
-fh = np.arange(0, int(meta['height'] / tilesize)+1, 1) # how many full tiles fits in height
+fw = np.arange(0, int(profile['width'] / tilesize)+1, 1) # how many full tiles fits in width
+fh = np.arange(0, int(profile['height'] / tilesize)+1, 1) # how many full tiles fits in height
 #####################
 
 # dict to save segment values
@@ -257,19 +262,19 @@ prefix = prefix_split[1] + '_' + prefix_split[2]
 
 #TODO move to another script 
 # label encode strings class
-#le = LabelEncoder()
-#le.fit(gdf.hab_class_ml.unique())
-#gdf['int_class'] = le.transform(gdf.hab_class_ml)
-#gdf['int_class'] = gdf['int_class'] + 1 # start unique classes with 1
+le = LabelEncoder()
+le.fit(gdf.hab_class_ml.unique())
+gdf['int_class'] = le.transform(gdf.hab_class_ml)
+gdf['int_class'] = gdf['int_class'] + 1 # start unique classes with 1
 # create point id column
-#gdf['point_id'] = gdf.index + 1
+gdf['point_id'] = gdf.index + 1
 #print(gdf.int_class.unique())
 #print(gdf[['hab_class_ml', 'int_class']])
 # save
-#fp_pts_encoded = fp_pts.split('.gpkg')[0] + '_encoded.gpkg'
+fp_pts_encoded = fp_pts.split('.gpkg')[0] + '_encoded.gpkg'
 #if gdf.crs != 3035: # check CRS
 #    gdf = gdf.to_crs(3035)
-#gdf.to_file(fp_pts_encoded, driver='GPKG', engine='pyogrio')
+gdf.to_file(fp_pts_encoded, driver='GPKG', engine='pyogrio')
 
 
 # create segmentation patches
@@ -293,7 +298,7 @@ for i in fw:
         pca = np.where(np.isnan(xds_c.values), np.nan, pca) # mask nan
         # pca variance to df and save
         df_pcavar = pd.DataFrame(pca_var, columns=['PCA_var'])
-        pcameta = meta.copy()
+        pcameta = profile.copy()
         pcameta.update(nodata=np.nan,
                        height=pca.shape[1],
                        width=pca.shape[2],
@@ -303,7 +308,7 @@ for i in fw:
         if os.path.isdir(pcadir) == False:
             os.mkdir(pcadir)
         pcaout = os.path.join(pcadir, prefix + '_pca_tile_' + str(tilesize) + str(i) + '_' + str(j) + '.tif')
-        with rio.open(pcaout, 'w', **pcameta, compress='LZW') as dst:
+        with rio.open(pcaout, 'w', **pcameta) as dst:
             dst.write(pca.astype(pcameta['dtype'])) 
         # save pcavar_df
         df_pcavar.to_csv(os.path.join(pcadir, prefix + 'pca_var.csv'))
@@ -311,7 +316,7 @@ for i in fw:
         # image segmentation parameters 
         n = 5
         sig = np.nanstd(xds.values[1:4,:,:]) #0.0005
-        s = 0.50
+        s = 0.10
         # felzenswalb segmentation 
         start = time.time()
         segments = felzenszwalb(xds_c[1:4].values, scale=s, sigma=sig, min_size=n, channel_axis=0) # use 10m visible bands, 0:xds_c.band.shape[0] <- this would use all bands
@@ -329,7 +334,7 @@ for i in fw:
         # expand dims
         segments = np.expand_dims(segments, axis=0)
         # define profile
-        segmeta = meta.copy()
+        segmeta = profile.copy()
         segmeta.update(dtype='uint32',
                        width=segments.shape[2],
                        height=segments.shape[1],
@@ -343,7 +348,7 @@ for i in fw:
         clip_out = os.path.join(segdir, prefix + str(tilesize) + '_n' + str(n) + '_s' + str(s).split('.')[1] + str(i) + '_' + str(j) + '.tif') 
 
         # save
-        with rio.open(clip_out, 'w', **segmeta, compress='LZW') as dst:
+        with rio.open(clip_out, 'w', **segmeta) as dst:
             dst.write(segments.astype(segmeta['dtype']))
         
         if use_bathymetry == True:
@@ -353,13 +358,13 @@ for i in fw:
                 bathy = bathy[:,0:data.shape[1],:]
             if bathy.shape[2] > data.shape[2]:
                 bathy = bathy[:,:,0:data.shape[2]]    
-            bathy_c, bathy_c_path = maskAndSave(bathy, os.path.dirname(fp_bathy)) # save tile
+            bathy_c, bathy_c_path = maskAndSave(bathy, os.path.dirname(fp_bathy), i, j) # save tile
 
         # =============================================================================        
         # finer scale segmentation where is field data     
         #TODO consider adding new segmentation iteration if different bottom classes within segment
         # clip pts to extent
-        gdf = clipGDF(fp_pts, clip_bounds)
+        gdf = clipGDF(fp_pts_encoded, clip_bounds)
         # check that points exists within clip bounds
         if len(gdf) == 0:
             continue
@@ -400,12 +405,39 @@ for i in fw:
         end = time.time()
         elapsed = end - start
         print('Time elapsed: %.2f' % elapsed, 'seconds')
+        segments2 = np.where(segments_fd == 1, segments2, 0)
+        old_ids = np.unique(segments2).tolist()
+        old_ids.remove(0) # drop 0 as it is nodata
+        # update segment IDs so they are unique to first segmentation
+        new_id_start = np.max(segments) + 1 # get maxmimum value from 1st segmentation and add 1
+        new_id_end = new_id_start + len(np.unique(segments2)) # length of new ids as end
+        new_ids = np.arange(new_id_start, new_id_end).tolist() # new id values
+        for o in old_ids:
+            segments2 = np.where(segments2 == o, new_ids[old_ids.index(o)], segments2)
+        # save
+        segments2_out = clip_out.split('.')[0] + '_2.tif'
+        with rio.open(segments2_out, 'w', **segmeta) as dst:
+            dst.write(segments2.astype(segmeta['dtype']))
+        
         # combine new segmentation to previous
         segments_iter = np.where(segments_fd == 1, segments2, segments)
         # save
         clip_out_iter = clip_out.split('.')[0] + '_iter.tif'
-        with rio.open(clip_out_iter, 'w', **segmeta, compress='LZW') as dst:
+        with rio.open(clip_out_iter, 'w', **segmeta) as dst:
             dst.write(segments_iter.astype(segmeta['dtype']))
+        
+        # check that old and new segment do not have same id
+        test = np.unique(segments).tolist()
+        to_test = np.unique(segments2).tolist()
+        same_ids = [k for k in to_test if k in test]
+        # select same ids from raster 
+        same_segments = np.zeros(shape=segments.shape)
+        for sameid in same_ids:
+            same_segments = np.where(segments_iter == sameid, segments_iter, same_segments)
+        same_out = clip_out_iter.split('.tif')[0] + '_same_ids.tif'
+        with rio.open(same_out, 'w', **segmeta) as dst:
+            dst.write(same_segments.astype(segmeta['dtype']))
+        
         
         # sample new segment ids to gdf       
         gdf = sampleRasterToGDF(clip_out_iter, gdf)
