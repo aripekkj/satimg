@@ -6,8 +6,8 @@ Create OBIA based ML training dataset from raster and field inventory point obse
 
 All datasets need to have same crs
 
-TODO: Consider adding another segmentation iteration where several points within segment
-    Parallelize and clean
+TODO: 
+    Parallelize(?) and clean
     Don't save gdf if no points
     
 @author: Ari-Pekka Jokinen
@@ -24,8 +24,7 @@ import geopandas as gpd
 import rasterio as rio
 import xarray as xr
 import rioxarray as rxr
-import itertools
-import json
+import matplotlib.pyplot as plt
 from shapely.geometry import box
 from sklearn.decomposition import PCA
 from skimage.segmentation import felzenszwalb
@@ -37,6 +36,7 @@ from collections import Counter
 # set whether to check for duplicates within segments
 check_duplicates = True
 use_bathymetry = True
+save_intermediates = False # set whether to save intermediate segmentation results
 
 fp = sys.argv[1]
 fp_pts = sys.argv[2]
@@ -197,17 +197,10 @@ def clipGDF(fp_points, bounds):
 
 def maskAndSave(data_array, tiledir, sfx_w, sfx_h):
     # change nodata
-#    xds_c = np.where(data_array.values == data_array._FillValue, np.nan, data_array.values)
     xds_c = xr.where(data_array == data_array._FillValue, np.nan, data_array)
     
     # mask inf
     xds_c = xr.where(np.isfinite(xds_c), xds_c, np.nan)
-    
-    # compute ndwi and mask land
-    #TODO use function
-    #ndwi = (xds_c.values[2]-xds_c.values[7]) / (xds_c.values[2]+xds_c.values[7])
-    # mask land
-    #xds_c = xr.where(ndwi < 0, np.nan, xds_c)
     
     # set nodata
     xds_c.rio.write_nodata(np.nan, inplace=True)
@@ -268,8 +261,6 @@ gdf['int_class'] = le.transform(gdf.hab_class_ml)
 gdf['int_class'] = gdf['int_class'] + 1 # start unique classes with 1
 # create point id column
 gdf['point_id'] = gdf.index + 1
-#print(gdf.int_class.unique())
-#print(gdf[['hab_class_ml', 'int_class']])
 # save
 fp_pts_encoded = fp_pts.split('.gpkg')[0] + '_encoded.gpkg'
 #if gdf.crs != 3035: # check CRS
@@ -311,7 +302,26 @@ for i in fw:
         with rio.open(pcaout, 'w', **pcameta) as dst:
             dst.write(pca.astype(pcameta['dtype'])) 
         # save pcavar_df
-        df_pcavar.to_csv(os.path.join(pcadir, prefix + 'pca_var.csv'))
+        df_pcavar.to_csv(os.path.join(pcadir, prefix + '_pca_var.csv'))
+        # compute difference between rows
+        df_pcavar['diff'] = df_pcavar['PCA_var'].diff(axis=0)
+        # get threshold where explained variance increases < 1
+        threshold = df_pcavar[df_pcavar['diff'] < 1].index[0]-1
+        
+        pcafig = os.path.join(pcadir, 'Var_explained_PCA.png')
+        # plot
+        fig,ax = plt.subplots()
+        ax.plot(df_pcavar['PCA_var'])
+        ax.set_xticks(np.arange(0,len(df_pcavar)))
+        ax.set_xticklabels(np.arange(1,len(df_pcavar)+1))
+        ax.set_xlabel('Principal component')
+        ax.set_ylabel('Variance explained')
+        ax.axhline(df_pcavar['PCA_var'].iloc[threshold], ls='--', color='gray', alpha=0.5) # threshold line
+        ax.grid()
+        plt.suptitle('Cumulative sum of variance explained by principal components')
+        plt.tight_layout()
+        plt.savefig(pcafig, dpi=300)
+        plt.show()
         
         # image segmentation parameters 
         n = 5
@@ -405,7 +415,9 @@ for i in fw:
         end = time.time()
         elapsed = end - start
         print('Time elapsed: %.2f' % elapsed, 'seconds')
+        # mask segments where field points don't overlap
         segments2 = np.where(segments_fd == 1, segments2, 0)
+        # get ids
         old_ids = np.unique(segments2).tolist()
         old_ids.remove(0) # drop 0 as it is nodata
         # update segment IDs so they are unique to first segmentation
@@ -413,11 +425,13 @@ for i in fw:
         new_id_end = new_id_start + len(np.unique(segments2)) # length of new ids as end
         new_ids = np.arange(new_id_start, new_id_end).tolist() # new id values
         for o in old_ids:
-            segments2 = np.where(segments2 == o, new_ids[old_ids.index(o)], segments2)
-        # save
-        segments2_out = clip_out.split('.')[0] + '_2.tif'
-        with rio.open(segments2_out, 'w', **segmeta) as dst:
-            dst.write(segments2.astype(segmeta['dtype']))
+            segments2 = np.where(segments2 == o, new_ids[old_ids.index(o)], segments2) # update new segment ids
+        
+        if save_intermediates == True:
+            # save new segments only
+            segments2_out = clip_out.split('.')[0] + '_new_segments.tif'
+            with rio.open(segments2_out, 'w', **segmeta) as dst:
+                dst.write(segments2.astype(segmeta['dtype']))
         
         # combine new segmentation to previous
         segments_iter = np.where(segments_fd == 1, segments2, segments)
@@ -425,18 +439,19 @@ for i in fw:
         clip_out_iter = clip_out.split('.')[0] + '_iter.tif'
         with rio.open(clip_out_iter, 'w', **segmeta) as dst:
             dst.write(segments_iter.astype(segmeta['dtype']))
+
         
-        # check that old and new segment do not have same id
-        test = np.unique(segments).tolist()
-        to_test = np.unique(segments2).tolist()
-        same_ids = [k for k in to_test if k in test]
+        # TESTING check that old and new segment do not have same id
+#        test = np.unique(segments).tolist()
+#        to_test = np.unique(segments2).tolist()
+#        same_ids = [k for k in to_test if k in test]
         # select same ids from raster 
-        same_segments = np.zeros(shape=segments.shape)
-        for sameid in same_ids:
-            same_segments = np.where(segments_iter == sameid, segments_iter, same_segments)
-        same_out = clip_out_iter.split('.tif')[0] + '_same_ids.tif'
-        with rio.open(same_out, 'w', **segmeta) as dst:
-            dst.write(same_segments.astype(segmeta['dtype']))
+#        same_segments = np.zeros(shape=segments.shape)
+#        for sameid in same_ids:
+#            same_segments = np.where(segments_iter == sameid, segments_iter, same_segments)
+#        same_out = clip_out_iter.split('.tif')[0] + '_same_ids.tif'
+#        with rio.open(same_out, 'w', **segmeta) as dst:
+#            dst.write(same_segments.astype(segmeta['dtype']))
         
         
         # sample new segment ids to gdf       
@@ -481,11 +496,6 @@ for i in fw:
                         # drop from gdf
                         gdf = gdf.drop(droplist)
         
-        # add geometry x and y columns
-#        epsg = str(gdf.crs.to_epsg())
-#        gdf['x_' + epsg] = gdf.geometry.x
-#        gdf['y_' + epsg] = gdf.geometry.y
-        
         # =============================================================================    
         # select pixels from each segment
         # reshape
@@ -510,10 +520,6 @@ for i in fw:
             int_class = int(gdf.int_class[gdf.segments == sg_id].values[0]) # get habitat class
             point_id = gdf.point_id[gdf.segments == sg_id].values[0] # get point id, DK point_id
             
-            # to dict
-            #result[int(point_id)] = dict(img=pxlist,
-            #                   pca=pcalist,
-            #                   int_class=int_class)
             segresult = pd.DataFrame(pxvals, columns=cols)
             segresult[pcacols] = pcavals
             if use_bathymetry == True:
@@ -533,8 +539,6 @@ os.remove(clip_out)
 # reset index
 result = result.reset_index(drop=True)
 
-#result2 = result
-#result = result2
 # check if na points exist
 traincols = cols+pcacols
 if use_bathymetry == True:
