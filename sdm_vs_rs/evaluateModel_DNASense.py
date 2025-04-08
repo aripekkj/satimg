@@ -87,16 +87,16 @@ print(np.unique(df.int_class, return_counts=True)) # check result
 ########################################################
 # define models #
 
-models = {'RF': {'model': RandomForestClassifier(n_jobs=6),
+models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balanced'),
                  'params': {"n_estimators": [50, 150, 200, 500], "max_depth": [3,6], "max_features": ['sqrt', 'log2']}
                  },
-          'SVM': {'model': SVC(probability=True),
+          'SVM': {'model': SVC(probability=True, class_weight='balanced'),
                   'params': {"kernel": ['rbf',], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01]}},
           'XGB': {'model': XGBClassifier(eval_metric='mlogloss'),
                   'params': {'objective': ['multi:softmax'], 'device':['cuda'], 
                              'learning_rate':[0.001,0.01,0.1],
                              'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6], 'early_stopping_rounds':[10], 
-                             'subsample': [0.8, 0.5], 'num_class': [len(np.unique(df.int_class))]}}
+                             'subsample': [0.8, 0.5], 'max_delta_step':[0,1], 'num_class': [len(np.unique(df.int_class))]}}
           }
 # data split for optimization
 X_train_pts, X_test_pts, y_train, y_test = train_test_split(gdf, gdf.int_class, 
@@ -257,15 +257,15 @@ for m in models:
     print(m + ' Overall accuracy %.2f' % (o_accuracy))
     print(m + ' Users accuracy', u_accuracy)
     print(m + ' Producers accuracy', p_accuracy)    
-    # plot 
-    #    import seaborn as sns
-    #    sns.set_theme(style='white')
-    #   fig, ax = plt.subplots()
-    #    ax = sns.heatmap(cmdf, annot=True, cmap='Blues', fmt='.0f', cbar=False)
-    #   ax.xaxis.set_ticks_position('top')
-    #    ax.tick_params(axis='both', which='both', length=0)
-    #    fig.suptitle('Confusion matrix of test set classifications')
-    #    plt.tight_layout()
+    # plot
+    #import seaborn as sns
+    #sns.set_theme(style='white')
+    #fig, ax = plt.subplots()
+    #ax = sns.heatmap(cmdf, annot=True, cmap='Blues', fmt='.0f', cbar=False)
+    #ax.xaxis.set_ticks_position('top')
+    #ax.tick_params(axis='both', which='both', length=0)
+    #fig.suptitle('Confusion matrix of test set classifications')
+    #plt.tight_layout()
     #plt.savefig(os.path.join(os.path.dirname(fp), 'plots', m + '_cm.png'), dpi=150, format='PNG')
     
     # fit all data to model and save
