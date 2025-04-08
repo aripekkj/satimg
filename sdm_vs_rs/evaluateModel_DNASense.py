@@ -103,7 +103,7 @@ X_train_pts, X_test_pts, y_train, y_test = train_test_split(gdf, gdf.int_class,
                                                             test_size=0.1, random_state=42,
                                                             stratify=gdf.int_class)
 X_train_pts, X_val_pts, y_train, y_val = train_test_split(X_train_pts, y_train, 
-                                                            test_size=0.10, random_state=42,
+                                                            test_size=0.225, random_state=42,
                                                             stratify=y_train)
 print('Train set proportion', len(X_train_pts)/len(gdf))
 print('Test set proportion', len(X_test_pts)/len(gdf))
@@ -114,6 +114,7 @@ y_train = le.transform(df['int_class'][df.point_id.isin(X_train_pts.point_id)])
 X_val = scaler.transform(df[traincols][df.point_id.isin(X_val_pts.point_id)])
 y_val = le.transform(df['int_class'][df.point_id.isin(X_val_pts.point_id)])
 groups = np.array(df['point_id'][df.point_id.isin(X_train_pts.point_id)])
+groups_val = np.array(df['point_id'][df.point_id.isin(X_val_pts.point_id)])
 
 # Stratified KFold for hyperparameter tuning
 sgkf = StratifiedGroupKFold(n_splits=10, shuffle=False)
@@ -131,8 +132,11 @@ for m in models:
     rcv = RandomizedSearchCV(models[m]['model'], param_distributions=models[m]['params'], scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
     if m == 'XGB':
         result = rcv.fit(X_train, y_train, eval_set=[(X_val, y_val)], groups=groups)
-    else:
-        result = rcv.fit(X_train, y_train, groups=groups)
+    else: # combine train and validation as model do not use eval_set
+        X_tr = np.vstack([X_train, X_val])
+        y_tr = np.concatenate([y_train, y_val])
+        groups_tr = np.concatenate([groups, groups_val])
+        result = rcv.fit(X_tr, y_tr, groups=groups_tr)
 #    result = scv.fit(Xtr_opt, ytr_opt, groups=groups)
     # summarize result
     print('Scores: %s' % result.scoring)
