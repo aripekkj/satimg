@@ -26,6 +26,7 @@ from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSe
 from sklearn.model_selection import cross_val_score, StratifiedKFold, StratifiedGroupKFold
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
+import xgboost as xgb
 from xgboost import XGBClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score, precision_score, recall_score
@@ -40,10 +41,10 @@ fp = sys.argv[1]
 fp_pts = sys.argv[2]
 
 ########################################################
-fp = '/mnt/d/users/e1008409/MK/DNASense/FIN/2018'
-fp_pts = os.path.join(fp, 'Finland_habitat_data_ml_2016-2023_encoded.gpkg')
+fp = '/mnt/d/users/e1008409/MK/DNASense/FIN/2023'
+fp_pts = os.path.join(fp, 'Finland_habitat_data_ml_2016-2023_v3_encoded.gpkg')
 # model dir
-modeldir = os.path.join(fp, 'model')
+modeldir = os.path.join(fp, 'model_')
 if os.path.isdir(modeldir) == False:
     os.mkdir(modeldir)
 prefix = os.path.basename(fp_pts).split('_')[0]
@@ -92,11 +93,12 @@ models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balance
                  },
           'SVM': {'model': SVC(probability=True, class_weight='balanced'),
                   'params': {"kernel": ['rbf',], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01]}},
-          'XGB': {'model': XGBClassifier(eval_metric='mlogloss'),
+          'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0),
                   'params': {'objective': ['multi:softmax'], 'device':['cuda'], 
-                             'learning_rate':[0.001,0.01,0.1],
-                             'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6], 'early_stopping_rounds':[10], 
-                             'subsample': [0.8, 0.5], 'max_delta_step':[0,1], 'num_class': [len(np.unique(df.int_class))]}}
+                             'learning_rate':[0.001,0.01,0.1,1],
+                             'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6], 
+                             'subsample': [0.8, 0.5], 'max_delta_step':[0,1], 'num_class': [len(np.unique(df.int_class))]}},
+
           }
 # data split for optimization
 X_train_pts, X_test_pts, y_train, y_test = train_test_split(gdf, gdf.int_class, 
@@ -130,13 +132,11 @@ for i, (train_index, val_index) in enumerate(sgkf.split(X_train, y_train, groups
 for m in models:
     #scv = GridSearchCV(models[m]['model'], param_grid=models[m]['params'], scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
     rcv = RandomizedSearchCV(models[m]['model'], param_distributions=models[m]['params'], scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
-    if m == 'XGB':
-        result = rcv.fit(X_train, y_train, eval_set=[(X_val, y_val)], groups=groups)
-    else: # combine train and validation as model do not use eval_set
-        X_tr = np.vstack([X_train, X_val])
-        y_tr = np.concatenate([y_train, y_val])
-        groups_tr = np.concatenate([groups, groups_val])
-        result = rcv.fit(X_tr, y_tr, groups=groups_tr)
+
+    X_tr = np.vstack([X_train, X_val])
+    y_tr = np.concatenate([y_train, y_val])
+    groups_tr = np.concatenate([groups, groups_val])
+    result = rcv.fit(X_tr, y_tr, groups=groups_tr)
 #    result = scv.fit(Xtr_opt, ytr_opt, groups=groups)
     # summarize result
     print('Scores: %s' % result.scoring)
@@ -145,6 +145,12 @@ for m in models:
     # save best params
     models[m]['best_params'] = result.best_params_
     
+    # save model best params
+    param_dict = models[m]['best_params']
+    param_dict_out = os.path.join(modeldir, m + '_best_params.json')
+    with open(param_dict_out, 'w') as f:
+        json.dump(param_dict, f, indent=4)
+
     # scores 
     test_score = result.cv_results_['mean_test_score']
     train_score = result.cv_results_['mean_train_score']
@@ -153,13 +159,16 @@ for m in models:
     ax.plot(train_score, color='blue', label='train')
     ax.plot(test_score, color='orange', label='test')
     ax.legend()
+    plt.suptitle(m + ' Cross validation scores')
     plt.tight_layout()
-    plot_out = os.path.join(modeldir, prefix + '_' + m + '_learningcurve.png')
+    plot_out = os.path.join(modeldir, prefix + '_' + m + '_CV_scores.png')
     plt.savefig(plot_out, dpi=300, format='PNG')
 
     if m == 'XGB':
-        # re-train with optimized params and early stopping (see 'Early Stopping' in: https://xgboost.readthedocs.io/en/stable/python/sklearn_estimator.html)
-        models[m]['model'] = XGBClassifier(**result.best_params_)
+        # add early stopping to params
+        param_dict['early_stopping_rounds'] = 20
+        # re-train with optimized params and early stopping (see 'Early Stopping' in: https://xgboost.readthedocs.io/en/stable/python/sklearn_estimator.html )
+        models[m]['model'] = XGBClassifier(**param_dict)
         models[m]['model'].fit(X_train, y_train, eval_set=[(X_train, y_train), (X_val, y_val)])
     
         #retrieve performance metrics
@@ -176,43 +185,7 @@ for m in models:
         plot_out = os.path.join(modeldir, m + '_performance.png')
         plt.savefig(plot_out, dpi=150, format='png')
         #plt.show()         
-        
-    # permutation importance
-    from sklearn.inspection import permutation_importance
-    # initiate plot
-    fig, ax = plt.subplots(1,3)
-    for m in models:
-        model = models[m]['model'].fit(X_train, y_train)
-        perm_result = permutation_importance(
-            model, X_val, y_val, n_repeats=10, scoring='accuracy')
-        sorted_importances_idx = perm_result.importances_mean.argsort() # use if you want to plot by sorted values
-        sorted_importances = pd.DataFrame(
-            perm_result.importances[sorted_importances_idx].T,
-            columns=traincols[sorted_importances_idx],
-            )
-        importances = pd.DataFrame(
-            perm_result.importances.T,
-            columns=traincols,
-            )
-        # plot
-        ax_i = list(models.keys()).index(m)
-        ax[ax_i].boxplot(importances, vert=False)
-        ax[ax_i].set_yticklabels([])
-        ax[0].set_yticklabels(importances.columns)
-        ax[ax_i].axvline(0, ls='--', color='black', alpha=0.6)
-        ax[ax_i].set_title(m)
-    fig.suptitle('Permutation importance')
-    fig.supxlabel('Decrease in accuracy score')
-    plt.tight_layout()
-    plot_out = os.path.join(modeldir, m + '_perm_importance.png')
-    plt.savefig(plot_out, dpi=300, format='PNG')
-
-    # save model best params
-    param_dict = models[m]['best_params']
-    param_dict_out = os.path.join(modeldir, m + '_best_params.json')
-    with open(param_dict_out, 'w') as f:
-        json.dump(param_dict, f, indent=4)
-        
+    
     # define test set
     X_test = scaler.transform(df[traincols][df.point_id.isin(X_test_pts.point_id)])
     y_test = le.transform(df['int_class'][df.point_id.isin(X_test_pts.point_id)])
@@ -225,7 +198,8 @@ for m in models:
     clf = models[m]['model'].set_params(**models[m]['best_params']) # set best model parameters from CV search
     X_tr = np.vstack([X_train, X_val])
     y_tr = np.concatenate([y_train, y_val])
-    clf.fit(X_tr, y_tr)
+    if m != 'XGB':
+        clf.fit(X_tr, y_tr)
     
     # predict on test set
     predf['predict'] = clf.predict(X_test)
@@ -278,3 +252,36 @@ for m in models:
     clf.fit(X, y) # fit all data before saving
     model_out = os.path.join(modeldir, m + '.sav')
     pickle.dump(clf, open(model_out, 'wb'))
+
+    
+# permutation importance
+from sklearn.inspection import permutation_importance
+# initiate plot
+fig, ax = plt.subplots(1,3)
+for m in models:
+    model = models[m]['model'].fit(X_train, y_train)
+    perm_result = permutation_importance(
+        model, X_train, y_train, n_repeats=10, scoring='accuracy')
+    sorted_importances_idx = perm_result.importances_mean.argsort() # use if you want to plot by sorted values
+    sorted_importances = pd.DataFrame(
+        perm_result.importances[sorted_importances_idx].T,
+        columns=traincols[sorted_importances_idx],
+        )
+    importances = pd.DataFrame(
+        perm_result.importances.T,
+        columns=traincols,
+        )
+    # plot
+    ax_i = list(models.keys()).index(m)
+    ax[ax_i].boxplot(importances, vert=False)
+    ax[ax_i].set_yticklabels([])
+    ax[0].set_yticklabels(importances.columns)
+    ax[ax_i].axvline(0, ls='--', color='black', alpha=0.6)
+    ax[ax_i].set_title(m)
+fig.suptitle('Permutation importance')
+fig.supxlabel('Decrease in accuracy score')
+plt.tight_layout()
+plot_out = os.path.join(modeldir, 'model' + '_perm_importance.png')
+plt.savefig(plot_out, dpi=300, format='PNG')
+
+
