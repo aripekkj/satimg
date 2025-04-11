@@ -20,7 +20,7 @@ import pickle
 from sklearnex import patch_sklearn 
 patch_sklearn()
 from sklearn import metrics
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import normalize, StandardScaler
 from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
 from sklearn.model_selection import cross_val_score, StratifiedKFold, StratifiedGroupKFold
@@ -29,7 +29,7 @@ from sklearn.ensemble import RandomForestClassifier
 import xgboost as xgb
 from xgboost import XGBClassifier
 from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import accuracy_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, cohen_kappa_score
 from dask import delayed
 from dask import compute
 import dask.bag as db
@@ -75,10 +75,10 @@ colset = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8'] + pcacols #+ ['b
 traincols = df.columns[1:-3].intersection(colset) #get the same columns as on list
 
 # standardize data
-scaler = StandardScaler().fit(df[traincols])
+#scaler = StandardScaler().fit(df[traincols])
 # save scaler
-scaler_out = os.path.join(modeldir, 'scaler.sav')
-pickle.dump(scaler, open(scaler_out, 'wb'))
+#scaler_out = os.path.join(modeldir, 'scaler.sav')
+#pickle.dump(scaler, open(scaler_out, 'wb'))
 #X = scaler.transform(df[traincols])
 le = LabelEncoder() 
 le.fit(np.unique(df.int_class)) # fit classes
@@ -88,15 +88,15 @@ print(np.unique(df.int_class, return_counts=True)) # check result
 ########################################################
 # define models #
 
-models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balanced'),
-                 'params': {"n_estimators": [50, 150, 200, 500], "max_depth": [3,6], "max_features": ['sqrt', 'log2']}
-                 },
+models = {'RF': {'model': RandomForestClassifier(n_jobs=6),
+                 'params': {"n_estimators": [50, 150, 200, 500], 'class_weight':['balanced'], "max_depth": [3,6],
+                            "max_features": ['sqrt', 'log2']}},
           'SVM': {'model': SVC(probability=True, class_weight='balanced'),
                   'params': {"kernel": ['rbf',], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01]}},
           'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0),
-                  'params': {'objective': ['multi:softmax'], 'device':['cuda'], 
+                  'params': {'objective': ['multi:softprob'], 'device':['cuda'], 
                              'learning_rate':[0.001,0.01,0.1,1],
-                             'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6], 
+                             'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6,9], 
                              'subsample': [0.8, 0.5], 'max_delta_step':[0,1], 'num_class': [len(np.unique(df.int_class))]}},
 
           }
@@ -111,15 +111,15 @@ print('Train set proportion', len(X_train_pts)/len(gdf))
 print('Test set proportion', len(X_test_pts)/len(gdf))
 print('Validation set proportion', len(X_val_pts)/len(gdf))
 
-X_train = scaler.transform(df[traincols][df.point_id.isin(X_train_pts.point_id)])
+X_train = np.array(df[traincols][df.point_id.isin(X_train_pts.point_id)])
 y_train = le.transform(df['int_class'][df.point_id.isin(X_train_pts.point_id)])
-X_val = scaler.transform(df[traincols][df.point_id.isin(X_val_pts.point_id)])
+X_val = np.array(df[traincols][df.point_id.isin(X_val_pts.point_id)])
 y_val = le.transform(df['int_class'][df.point_id.isin(X_val_pts.point_id)])
 groups = np.array(df['point_id'][df.point_id.isin(X_train_pts.point_id)])
 groups_val = np.array(df['point_id'][df.point_id.isin(X_val_pts.point_id)])
 
 # Stratified KFold for hyperparameter tuning
-sgkf = StratifiedGroupKFold(n_splits=10, shuffle=False)
+sgkf = StratifiedGroupKFold(n_splits=10, shuffle=True)
 for i, (train_index, val_index) in enumerate(sgkf.split(X_train, y_train, groups)):
     print(f"Fold {i}:")
     print(f"  Train: index={train_index}")
@@ -128,12 +128,29 @@ for i, (train_index, val_index) in enumerate(sgkf.split(X_train, y_train, groups
     print(f"         group={groups[val_index]}")
     print('Classes in train set', np.unique(y_train[train_index] ,return_counts=True))
     print('Classes in test set', np.unique(y_train[val_index] ,return_counts=True))
+# make small test sample for testing
+    
 # hyperparameter optimization
 for m in models:
     #scv = GridSearchCV(models[m]['model'], param_grid=models[m]['params'], scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
     rcv = RandomizedSearchCV(models[m]['model'], param_distributions=models[m]['params'], scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
-
+    
+    #TODO 
+    # make pipeline 
+    # pipeline = Pipeline([('scaler', StandardScaler()), (m, models[m]['model'])])
+    # pparams = pipeline.get_params()
+    # param_grid = dict()
+    # for p in models[m]['params']:
+    #     for pp in pparams:
+    #         if p in pp:
+    #             param_grid[pp] = models[m]['params'].get(p)
+    # # set estimator params
+    # search = RandomizedSearchCV(pipeline, param_distributions=param_grid, scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
+    # result = search.fit(X_train, y_train)
+    
     X_tr = np.vstack([X_train, X_val])
+    scaler = StandardScaler().fit(X_tr)
+    X_tr = scaler.transform(X_tr)
     y_tr = np.concatenate([y_train, y_val])
     groups_tr = np.concatenate([groups, groups_val])
     result = rcv.fit(X_tr, y_tr, groups=groups_tr)
@@ -187,6 +204,8 @@ for m in models:
         #plt.show()         
     
     # define test set
+    
+    scaler = StandardScaler().fit(df[traincols][df.point_id.isin(X_test_pts.point_id)])
     X_test = scaler.transform(df[traincols][df.point_id.isin(X_test_pts.point_id)])
     y_test = le.transform(df['int_class'][df.point_id.isin(X_test_pts.point_id)])
     
@@ -230,7 +249,9 @@ for m in models:
     u_accuracy = cm.diagonal() / cm.sum(axis=1) # user's accuracy
     print(m + ' Overall accuracy %.2f' % (o_accuracy))
     print(m + ' Users accuracy', u_accuracy)
-    print(m + ' Producers accuracy', p_accuracy)    
+    print(m + ' Producers accuracy', p_accuracy)
+    kappa = cohen_kappa_score(predf.truth, predf.predict)
+    print('Cohens Kappa %.2f' % (kappa))
     # plot
     #import seaborn as sns
     #sns.set_theme(style='white')
