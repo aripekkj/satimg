@@ -161,7 +161,10 @@ for m in models:
     print(m, 'Best Score: %s' % result.best_score_)
     print(m, 'Best Hyperparameters: %s' % result.best_params_)
     # save best params
-    models[m]['best_params'] = result.best_params_
+    for k in result.best_params_:
+        print(k)
+        key = k.split('__')[1] # drop underscores from pipeline parameter names
+        models[m][key] = result.best_params_.get(k) # set value
     
     # save model best params
     param_dict = models[m]['best_params']
