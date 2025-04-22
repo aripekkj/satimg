@@ -96,9 +96,10 @@ models = {'RF': {'model': RandomForestClassifier(n_jobs=6),
           'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0),
                   'params': {'objective': ['multi:softprob'], 'device':['cuda'], 
                              'learning_rate':[0.001,0.01,0.1,1],
-                             'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6,9], 
-                             'subsample': [0.8, 0.5], 'max_delta_step':[0,1], 'num_class': [len(np.unique(df.int_class))]}},
-
+                             'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6], 
+                             'subsample': [0.8, 0.5], 'max_delta_step':[0,1], 
+                             'min_child_weight': [0, 0.5, 1],
+                             'num_class': [len(np.unique(df.int_class))]}},
           }
 # data split for optimization
 X_train_pts, X_test_pts, y_train, y_test = train_test_split(gdf, gdf.int_class, 
@@ -111,9 +112,9 @@ print('Train set proportion', len(X_train_pts)/len(gdf))
 print('Test set proportion', len(X_test_pts)/len(gdf))
 print('Validation set proportion', len(X_val_pts)/len(gdf))
 
-X_train = np.array(df[traincols][df.point_id.isin(X_train_pts.point_id)])
+X_train = df[traincols][df.point_id.isin(X_train_pts.point_id)]
 y_train = le.transform(df['int_class'][df.point_id.isin(X_train_pts.point_id)])
-X_val = np.array(df[traincols][df.point_id.isin(X_val_pts.point_id)])
+X_val = df[traincols][df.point_id.isin(X_val_pts.point_id)]
 y_val = le.transform(df['int_class'][df.point_id.isin(X_val_pts.point_id)])
 groups = np.array(df['point_id'][df.point_id.isin(X_train_pts.point_id)])
 groups_val = np.array(df['point_id'][df.point_id.isin(X_val_pts.point_id)])
@@ -212,7 +213,7 @@ for m in models:
     scaler = StandardScaler().fit(df[traincols][df.point_id.isin(X_test_pts.point_id)])
     X_test = scaler.transform(df[traincols][df.point_id.isin(X_test_pts.point_id)])
     y_test = le.transform(df['int_class'][df.point_id.isin(X_test_pts.point_id)])
-    
+        
     # dataframe for results
     predf = pd.DataFrame()
     predf['truth'] = y_test
@@ -223,7 +224,8 @@ for m in models:
     y_tr = np.concatenate([y_train, y_val])
     if m != 'XGB':
         clf.fit(X_tr, y_tr)
-    
+    X_train = scaler.transform(X_train)
+    clf.fit(X_train, y_train)
     # predict on test set
     predf['predict'] = clf.predict(X_test)
     # create confusion matrix
