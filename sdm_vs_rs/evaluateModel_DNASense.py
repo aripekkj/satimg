@@ -267,7 +267,7 @@ for m in models:
     #ax.tick_params(axis='both', which='both', length=0)
     #fig.suptitle('Confusion matrix of test set classifications')
     #plt.tight_layout()
-    #plt.savefig(os.path.join(os.path.dirname(fp), 'plots', m + '_cm.png'), dpi=150, format='PNG')
+    #plt.savefig(os.path.join(modeldir, m + '_cm.png'), dpi=150, format='PNG')
     
     # fit all data to model and save
     X = np.vstack([X_train, X_val, X_test])
