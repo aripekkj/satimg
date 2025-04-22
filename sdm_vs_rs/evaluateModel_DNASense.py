@@ -161,11 +161,12 @@ for m in models:
     print(m, 'Best Score: %s' % result.best_score_)
     print(m, 'Best Hyperparameters: %s' % result.best_params_)
     # save best params
+    best_params = dict()
     for k in result.best_params_:
         print(k)
         key = k.split('__')[1] # drop underscores from pipeline parameter names
-        models[m][key] = result.best_params_.get(k) # set value
-    
+        best_params[key] = result.best_params_.get(k) # set value
+    models[m]['best_params'] = best_params
     # save model best params
     param_dict = models[m]['best_params']
     param_dict_out = os.path.join(modeldir, m + '_best_params.json')
