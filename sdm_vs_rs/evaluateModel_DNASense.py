@@ -270,8 +270,9 @@ for m in models:
     #plt.savefig(os.path.join(modeldir, m + '_cm.png'), dpi=150, format='PNG')
     
     # fit all data to model and save
-    X = np.vstack([X_train, X_val, X_test])
-    y = np.concatenate([y_train, y_val, y_test])
+    X = df[traincols]
+    X = scaler.fit_transform(X)
+    y = le.fit_transform(df['int_class'])
     if m == 'XGB':
         # define output model parameters without early stopping
         param_dict['early_stopping_rounds'] = None    
