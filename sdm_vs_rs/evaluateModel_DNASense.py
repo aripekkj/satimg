@@ -137,23 +137,24 @@ for m in models:
     
     #TODO 
     # make pipeline 
-    # pipeline = Pipeline([('scaler', StandardScaler()), (m, models[m]['model'])])
-    # pparams = pipeline.get_params()
-    # param_grid = dict()
-    # for p in models[m]['params']:
-    #     for pp in pparams:
-    #         if p in pp:
-    #             param_grid[pp] = models[m]['params'].get(p)
+    pipeline = Pipeline([('scaler', StandardScaler()),
+                         (m, models[m]['model'])])
+    pparams = pipeline.get_params()
+    param_dict = dict()
+    for p in models[m]['params']:
+        for pp in pparams:
+            if p in pp:
+                param_dict[pp] = models[m]['params'].get(p)
     # # set estimator params
-    # search = RandomizedSearchCV(pipeline, param_distributions=param_grid, scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
-    # result = search.fit(X_train, y_train)
+    search = RandomizedSearchCV(pipeline, param_distributions=param_dict, scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
+    result = search.fit(X_train, y_train, groups=groups)
     
-    X_tr = np.vstack([X_train, X_val])
-    scaler = StandardScaler().fit(X_tr)
-    X_tr = scaler.transform(X_tr)
-    y_tr = np.concatenate([y_train, y_val])
-    groups_tr = np.concatenate([groups, groups_val])
-    result = rcv.fit(X_tr, y_tr, groups=groups_tr)
+#    X_tr = np.vstack([X_train, X_val])
+#    scaler = StandardScaler().fit(X_tr)
+#    X_tr = scaler.transform(X_tr)
+#    y_tr = np.concatenate([y_train, y_val])
+#    groups_tr = np.concatenate([groups, groups_val])
+#    result = rcv.fit(X_tr, y_tr, groups=groups_tr)
 #    result = scv.fit(Xtr_opt, ytr_opt, groups=groups)
     # summarize result
     print('Scores: %s' % result.scoring)
@@ -203,8 +204,7 @@ for m in models:
         plt.savefig(plot_out, dpi=150, format='png')
         #plt.show()         
     
-    # define test set
-    
+    # test set    
     scaler = StandardScaler().fit(df[traincols][df.point_id.isin(X_test_pts.point_id)])
     X_test = scaler.transform(df[traincols][df.point_id.isin(X_test_pts.point_id)])
     y_test = le.transform(df['int_class'][df.point_id.isin(X_test_pts.point_id)])
