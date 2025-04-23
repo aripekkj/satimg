@@ -26,6 +26,7 @@ from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSe
 from sklearn.model_selection import cross_val_score, StratifiedKFold, StratifiedGroupKFold
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.utils import compute_class_weight, compute_sample_weight
 import xgboost as xgb
 from xgboost import XGBClassifier
 from sklearn.preprocessing import LabelEncoder
@@ -90,37 +91,42 @@ print(np.unique(df.int_class, return_counts=True)) # check result
 
 models = {'RF': {'model': RandomForestClassifier(n_jobs=6),
                  'params': {"n_estimators": [50, 150, 200, 500], 'class_weight':['balanced'], "max_depth": [3,6],
-                            "max_features": ['sqrt', 'log2']}},
+                            "max_features": ['sqrt', 'log2'], "min_samples_leaf":[1,2,4], "min_samples_split":[2,5,10],
+                            "bootstrap":[True,False]}},
           'SVM': {'model': SVC(probability=True, class_weight='balanced'),
                   'params': {"kernel": ['rbf',], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01]}},
           'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0),
                   'params': {'objective': ['multi:softprob'], 'device':['cuda'], 
-                             'learning_rate':[0.001,0.01,0.1,1],
+                             'learning_rate':[0.001,0.01,0.1,1], "gamma":[0,1,2,3],
                              'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6], 
-                             'subsample': [0.8, 0.5], 'max_delta_step':[0,1], 
-                             'min_child_weight': [0, 0.5, 1],
+                             'subsample': [0.5, 0.8, 1], 'max_delta_step':[0,1], 
+                             'min_child_weight': [1,3,5],
                              'num_class': [len(np.unique(df.int_class))]}},
           }
 # data split for optimization
-X_train_pts, X_test_pts, y_train, y_test = train_test_split(gdf, gdf.int_class, 
-                                                            test_size=0.1, random_state=42,
+X_train_pts, X_test_pts, y_train_pts, y_test_pts = train_test_split(gdf, gdf.int_class, 
+                                                            test_size=0.3, random_state=42,
                                                             stratify=gdf.int_class)
-X_train_pts, X_val_pts, y_train, y_val = train_test_split(X_train_pts, y_train, 
-                                                            test_size=0.225, random_state=42,
-                                                            stratify=y_train)
+# X_train_pts, X_val_pts, y_train, y_val = train_test_split(X_train_pts, y_train, 
+#                                                             test_size=0.225, random_state=42,
+#                                                             stratify=y_train)
 print('Train set proportion', len(X_train_pts)/len(gdf))
 print('Test set proportion', len(X_test_pts)/len(gdf))
-print('Validation set proportion', len(X_val_pts)/len(gdf))
+#print('Validation set proportion', len(X_val_pts)/len(gdf))
 
-X_train = df[traincols][df.point_id.isin(X_train_pts.point_id)]
-y_train = le.transform(df['int_class'][df.point_id.isin(X_train_pts.point_id)])
-X_val = df[traincols][df.point_id.isin(X_val_pts.point_id)]
-y_val = le.transform(df['int_class'][df.point_id.isin(X_val_pts.point_id)])
-groups = np.array(df['point_id'][df.point_id.isin(X_train_pts.point_id)])
-groups_val = np.array(df['point_id'][df.point_id.isin(X_val_pts.point_id)])
+X_train = df[traincols][df.point_id.isin(X_train_pts.point_id)].to_numpy()
+y_train = le.transform(df['int_class'][df.point_id.isin(X_train_pts.point_id)].to_numpy())
+#X_val = df[traincols][df.point_id.isin(X_val_pts.point_id)].to_numpy()
+#y_val = le.transform(df['int_class'][df.point_id.isin(X_val_pts.point_id)].to_numpy())
+groups = df['point_id'][df.point_id.isin(X_train_pts.point_id)].to_numpy()
+#groups_val = df['point_id'][df.point_id.isin(X_val_pts.point_id)].to_numpy()
+# sample weights
+print('Classes', np.unique(y_train, return_counts=True))
+print('Class weights', compute_class_weight('balanced', classes=np.unique(y_train), y=y_train))
+sample_weights = compute_sample_weight('balanced', y_train)
 
 # Stratified KFold for hyperparameter tuning
-sgkf = StratifiedGroupKFold(n_splits=10, shuffle=True)
+sgkf = StratifiedGroupKFold(n_splits=10, shuffle=False)
 for i, (train_index, val_index) in enumerate(sgkf.split(X_train, y_train, groups)):
     print(f"Fold {i}:")
     print(f"  Train: index={train_index}")
@@ -134,29 +140,22 @@ for i, (train_index, val_index) in enumerate(sgkf.split(X_train, y_train, groups
 # hyperparameter optimization
 for m in models:
     #scv = GridSearchCV(models[m]['model'], param_grid=models[m]['params'], scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
-    rcv = RandomizedSearchCV(models[m]['model'], param_distributions=models[m]['params'], scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
+    #rcv = RandomizedSearchCV(models[m]['model'], param_distributions=models[m]['params'], scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
     
-    #TODO 
     # make pipeline 
     pipeline = Pipeline([('scaler', StandardScaler()),
-                         (m, models[m]['model'])])
+                         ('classifier', models[m]['model'])])
     pparams = pipeline.get_params()
     param_dict = dict()
     for p in models[m]['params']:
         for pp in pparams:
             if p in pp:
                 param_dict[pp] = models[m]['params'].get(p)
-    # # set estimator params
+
+    # set estimator params
     search = RandomizedSearchCV(pipeline, param_distributions=param_dict, scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=-1)
+
     result = search.fit(X_train, y_train, groups=groups)
-    
-#    X_tr = np.vstack([X_train, X_val])
-#    scaler = StandardScaler().fit(X_tr)
-#    X_tr = scaler.transform(X_tr)
-#    y_tr = np.concatenate([y_train, y_val])
-#    groups_tr = np.concatenate([groups, groups_val])
-#    result = rcv.fit(X_tr, y_tr, groups=groups_tr)
-#    result = scv.fit(Xtr_opt, ytr_opt, groups=groups)
     # summarize result
     print('Scores: %s' % result.scoring)
     print(m, 'Best Score: %s' % result.best_score_)
@@ -187,32 +186,32 @@ for m in models:
     plot_out = os.path.join(modeldir, prefix + '_' + m + '_CV_scores.png')
     plt.savefig(plot_out, dpi=300, format='PNG')
 
-    if m == 'XGB':
-        # add early stopping to params
-        param_dict['early_stopping_rounds'] = 20
-        # re-train with optimized params and early stopping (see 'Early Stopping' in: https://xgboost.readthedocs.io/en/stable/python/sklearn_estimator.html )
-        models[m]['model'] = XGBClassifier(**param_dict)
-        models[m]['model'].fit(X_train, y_train, eval_set=[(X_train, y_train), (X_val, y_val)])
+    # if m == 'XGB':
+    #     # add early stopping to params
+    #     param_dict['early_stopping_rounds'] = 10
+    #     # re-train with optimized params and early stopping (see 'Early Stopping' in: https://xgboost.readthedocs.io/en/stable/python/sklearn_estimator.html )
+    #     models[m]['model'] = XGBClassifier(**param_dict)
+    #     models[m]['model'].fit(X_train, y_train, eval_set=[(X_train, y_train), (X_val, y_val)], sample_weight=sample_weights)
     
-        #retrieve performance metrics
-        results = models[m]['model'].evals_result()
-        epochs = len(results['validation_0']['mlogloss'])
-        x_axis = range(0, epochs)
-        # plot log loss
-        fig, ax = plt.subplots()
-        ax.plot(x_axis, results['validation_0']['mlogloss'], label='Train')
-        ax.plot(x_axis, results['validation_1']['mlogloss'], label='Test')
-        ax.legend()
-        ax.set_ylabel('MLogLoss')
-        plt.suptitle(m + ' multi logloss with optimized params and early stopping')
-        plot_out = os.path.join(modeldir, m + '_performance.png')
-        plt.savefig(plot_out, dpi=150, format='png')
-        #plt.show()         
+    #     #retrieve performance metrics
+    #     results = models[m]['model'].evals_result()
+    #     epochs = len(results['validation_0']['mlogloss'])
+    #     x_axis = range(0, epochs)
+    #     # plot log loss
+    #     fig, ax = plt.subplots()
+    #     ax.plot(x_axis, results['validation_0']['mlogloss'], label='Train')
+    #     ax.plot(x_axis, results['validation_1']['mlogloss'], label='Test')
+    #     ax.legend()
+    #     ax.set_ylabel('MLogLoss')
+    #     plt.suptitle(m + ' multi logloss with optimized params and early stopping')
+    #     plot_out = os.path.join(modeldir, m + '_performance.png')
+    #     plt.savefig(plot_out, dpi=150, format='png')
+    #     #plt.show()         
     
     # test set    
-    scaler = StandardScaler().fit(df[traincols][df.point_id.isin(X_test_pts.point_id)])
-    X_test = scaler.transform(df[traincols][df.point_id.isin(X_test_pts.point_id)])
-    y_test = le.transform(df['int_class'][df.point_id.isin(X_test_pts.point_id)])
+    X_test = StandardScaler().fit_transform(df[traincols][df.point_id.isin(X_test_pts.point_id)].to_numpy())
+    #X_test = scaler.transform(df[traincols][df.point_id.isin(X_test_pts.point_id)])
+    y_test = le.transform(df['int_class'][df.point_id.isin(X_test_pts.point_id)].to_numpy())
         
     # dataframe for results
     predf = pd.DataFrame()
@@ -220,12 +219,15 @@ for m in models:
     
     # set model
     clf = models[m]['model'].set_params(**models[m]['best_params']) # set best model parameters from CV search
-    X_tr = np.vstack([X_train, X_val])
-    y_tr = np.concatenate([y_train, y_val])
-    if m != 'XGB':
-        clf.fit(X_tr, y_tr)
-    X_train = scaler.transform(X_train)
-    clf.fit(X_train, y_train)
+    if m == 'XGB':
+        clf.fit(X_train, y_train, sample_weight=sample_weights)
+    else:
+        clf.fit(X_train, y_train)
+    # X_tr = StandardScaler().fit_transform(np.vstack([X_train, X_val]))
+    # y_tr = np.concatenate([y_train, y_val])
+    # if m != 'XGB':
+    #     clf.fit(X_tr, y_tr)
+    
     # predict on test set
     predf['predict'] = clf.predict(X_test)
     # create confusion matrix
@@ -271,7 +273,7 @@ for m in models:
     
     # fit all data to model and save
     X = df[traincols]
-    X = scaler.fit_transform(X)
+    X = StandardScaler().fit_transform(X)
     y = le.fit_transform(df['int_class'])
     if m == 'XGB':
         # define output model parameters without early stopping
