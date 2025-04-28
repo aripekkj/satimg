@@ -40,8 +40,8 @@ fp = sys.argv[1]
 fp_pts = sys.argv[2]
 
 ########################################################
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/Finland_habitat_data_ml_5m_env_sampled_3035_filtered.gpkg'
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece/Greece_habitat_data_ml_filtered.gpkg'
 # model dir
 modeldir = os.path.join(fp, 'model')
 if os.path.isdir(modeldir) == False:
@@ -231,22 +231,25 @@ param_dict_out = os.path.join(modeldir, 'best_params.json')
 with open(param_dict_out, 'w') as f_out:
     json.dump(param_dict, f_out, indent=4)
 
-# plot hyperparameter optimization results
-fig, ax = plt.subplots()
-cv_fold_keys = [key for key in models[m].keys() if 'cv_result' in key]
-mean_train = []
-mean_test = []
-for c in cv_fold_keys:
-    mean_train.append(models[m][c]['mean_train_score'])
-    mean_test.append(models[m][c]['mean_test_score'])
-ax.plot(np.mean(mean_train, axis=1), color='blue', label='train')
-ax.plot(np.mean(mean_test, axis=1), color='orange', label='test')
-ax.legend()
-title_str = m + ': Mean balanced accuracy from \n CV and hyperparameter search' 
-plt.suptitle(title_str)
-plt.tight_layout()
-plot_out = os.path.join(modeldir, prefix + '_' + m + '_' + f + '_learningcurve.png')
-plt.savefig(plot_out, dpi=300, format='PNG')
+for m in models:
+#    if m != 'RF':
+#        continue
+    # plot hyperparameter optimization results
+    fig, ax = plt.subplots()
+    cv_fold_keys = [key for key in models[m].keys() if 'cv_result' in key]
+    mean_train = []
+    mean_test = []
+    for c in cv_fold_keys:
+        mean_train.append(models[m][c]['mean_train_score'])
+        mean_test.append(models[m][c]['mean_test_score'])
+    ax.plot(np.mean(mean_train, axis=1), color='blue', label='train')
+    ax.plot(np.mean(mean_test, axis=1), color='orange', label='test')
+    ax.legend()
+    title_str = m + ': Mean balanced accuracy from \n CV and hyperparameter search' 
+    plt.suptitle(title_str)
+    plt.tight_layout()
+    plot_out = os.path.join(modeldir, prefix + '_' + m + '_learningcurve.png')
+    plt.savefig(plot_out, dpi=300, format='PNG')
 
 # permutation importance
 from sklearn.inspection import permutation_importance
