@@ -77,11 +77,9 @@ colset = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8'] + pcacols + ['ba
 traincols = df.columns[1:-3].intersection(colset) #get the same columns as on list
 
 # standardize data
-#scaler = StandardScaler().fit(df[traincols])
 le = LabelEncoder() 
 le.fit(np.unique(df.int_class)) # fit classes
-#y = le.transform(y) # transform
-print(np.unique(df.int_class, return_counts=True)) # check result
+print(np.unique(df.int_class, return_counts=True)) # check n_classes, n_samples
 
 ########################################################
 # define models #
@@ -92,14 +90,12 @@ models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balance
                            "bootstrap":[True,False]}},
           'SVM': {'model': SVC(probability=True, class_weight='balanced'),
                   'params': {"kernel": ['rbf'], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01]}},
-          'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0, device='cuda'),
+          'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0, device='cuda', num_class=len(np.unique(df.int_class))),
                   'params': {'objective': ['multi:softmax'], 'learning_rate':[0.0001, 0.001, 0.01, 0.1, 0.3],
                              'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6],
-                             'subsample': [0.8, 0.5], 'num_class': [len(np.unique(df.int_class))]}
+                             'subsample': [0.8, 0.5]}
                   }
           }
-
-
 
 # output columns 
 gdf['test_fold'] = None
@@ -149,18 +145,18 @@ for f in folds:
     
     # StratifiedGroupKFold for hyperparameter tuning
     sgkf = StratifiedGroupKFold(n_splits=5, shuffle=False)
-    for i, (train_index, test_index) in enumerate(sgkf.split(X_train, y_train, groups)):
-        print(f"Fold {i}:")
-        print(f"  Train: index={train_index}")
-        print(f"         group={groups[train_index]}")
-        print(f"  Test:  index={test_index}")
-        print(f"         group={groups[test_index]}")
-        print('Classes in train set', np.unique(y_train[train_index] ,return_counts=True))
-        print('Classes in test set', np.unique(y_train[test_index] ,return_counts=True))
+    # for i, (train_index, test_index) in enumerate(sgkf.split(X_train, y_train, groups)):
+    #     print(f"Fold {i}:")
+    #     print(f"  Train: index={train_index}")
+    #     print(f"         group={groups[train_index]}")
+    #     print(f"  Test:  index={test_index}")
+    #     print(f"         group={groups[test_index]}")
+    #     print('Classes in train set', np.unique(y_train[train_index] ,return_counts=True))
+    #     print('Classes in test set', np.unique(y_train[test_index] ,return_counts=True))
     # hyperparameter optimization
     for m in models:
-#        if m != 'RF':
-#            continue
+        if m != 'XGB':
+            continue
         # make pipeline 
         pipeline = Pipeline([('scaler', StandardScaler()),
                              ('classifier', models[m]['model'])])
@@ -216,12 +212,11 @@ for f in folds:
         # add predictions for all classes
         for n in np.arange(len(probacols)): 
             print(n)
-#            gdf[probacols[n]].iloc[gdf_test.index] = pred_proba[:,n]
             gdf.loc[gdf_test.index, probacols[n]] = pred_proba[:,n]
         
         # predicted value to gdf
-#        gdf['test_fold'].iloc[gdf_test.index] = f  
         gdf.loc[gdf_test.index, 'test_fold'] = f
+
 
 # save model dict
 models_dict_out = os.path.join(modeldir, 'models_cv_result.npy')
@@ -255,6 +250,7 @@ for m in models:
 # permutation importance
 from sklearn.inspection import permutation_importance
 for m in models:
+    X_train = StandardScaler().fit_transform(X_train)
     model = models[m]['model'].fit(X_train, y_train)
     perm_result = permutation_importance(
         model, X_train, y_train, n_repeats=10, scoring='accuracy')
@@ -332,7 +328,7 @@ gdf_out = os.path.join(os.path.dirname(fp_pts), prefix + '_preds.gpkg')
 gdf.to_file(gdf_out, engine='pyogrio')
 
 # save models
-X = StandardScaler.fit_transform(df[traincols]) # transform
+X = StandardScaler.fit_transform(df[traincols].to_numpy()) # transform
 y = le.transform(df.int_class) # transform
 for m in models:
     clf = models[m]['model']
