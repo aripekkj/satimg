@@ -216,18 +216,20 @@ for f in folds:
         # add predictions for all classes
         for n in np.arange(len(probacols)): 
             print(n)
-            gdf[probacols[n]].iloc[gdf_test.index] = pred_proba[:,n]
+#            gdf[probacols[n]].iloc[gdf_test.index] = pred_proba[:,n]
+            gdf.loc[gdf_test.index, probacols[n]] = pred_proba[:,n]
         
         # predicted value to gdf
-        gdf['test_fold'].iloc[gdf_test.index] = f  
+#        gdf['test_fold'].iloc[gdf_test.index] = f  
+        gdf.loc[gdf_test.index, 'test_fold'] = f
 
 # save model dict
 models_dict_out = os.path.join(modeldir, 'models_cv_result.npy')
 np.save(models_dict_out, models)
 # save param dict
 param_dict_out = os.path.join(modeldir, 'best_params.json')
-with open(param_dict_out, 'w') as f:
-    json.dump(param_dict, f, indent=4)
+with open(param_dict_out, 'w') as f_out:
+    json.dump(param_dict, f_out, indent=4)
 
 # plot hyperparameter optimization results
 fig, ax = plt.subplots()
