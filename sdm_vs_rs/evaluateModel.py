@@ -91,9 +91,9 @@ models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balance
                             "min_samples_leaf":[1,2,4], "min_samples_split":[2,5,10],
                            "bootstrap":[True,False]}},
           'SVM': {'model': SVC(probability=True, class_weight='balanced'),
-                  'params': {"kernel": ['rbf',], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01]}},
+                  'params': {"kernel": ['rbf'], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01]}},
           'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0, device='cuda'),
-                  'params': {'objective': ['multi:softprob'], 'learning_rate':[0.0001, 0.001, 0.01, 0.1, 0.3],
+                  'params': {'objective': ['multi:softmax'], 'learning_rate':[0.0001, 0.001, 0.01, 0.1, 0.3],
                              'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6],
                              'subsample': [0.8, 0.5], 'num_class': [len(np.unique(df.int_class))]}
                   }
@@ -244,6 +244,7 @@ for m in models:
         mean_test.append(models[m][c]['mean_test_score'])
     ax.plot(np.mean(mean_train, axis=1), color='blue', label='train')
     ax.plot(np.mean(mean_test, axis=1), color='orange', label='test')
+    ax.set_xlabel('CV fold')
     ax.legend()
     title_str = m + ': Mean balanced accuracy from \n CV and hyperparameter search' 
     plt.suptitle(title_str)
