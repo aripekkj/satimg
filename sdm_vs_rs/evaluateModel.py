@@ -29,6 +29,7 @@ from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils import compute_class_weight, compute_sample_weight
 from sklearn.metrics import accuracy_score, precision_score, recall_score
 from dask import delayed
 from dask import compute
@@ -51,7 +52,7 @@ prefix = os.path.basename(fp_pts).split('_')[0]
 # read data
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
 # copy depth column with different name for prediction
-gdf['bathymetry'] = gdf.depth
+#gdf['bathymetry'] = gdf.depth
 
 # get pca variance
 fp_pca = os.path.join(fp, 'pca', '*pca_var.csv')
@@ -143,7 +144,8 @@ for f in folds:
     groups = df['point_id'][df.point_id.isin(folds[f][0])].to_numpy()
     print('Classes in train set', np.unique(y_train ,return_counts=True))
     print('Classes in test set', np.unique(y_test ,return_counts=True))
-    
+    # sample weights
+    sample_weights = compute_sample_weight('balanced', y_train)
     # StratifiedGroupKFold for hyperparameter tuning
     sgkf = StratifiedGroupKFold(n_splits=5, shuffle=False)
     # for i, (train_index, test_index) in enumerate(sgkf.split(X_train, y_train, groups)):
@@ -156,8 +158,8 @@ for f in folds:
     #     print('Classes in test set', np.unique(y_train[test_index] ,return_counts=True))
     # hyperparameter optimization
     for m in models:
-        if m != 'RF':
-            continue
+#        if m != 'RF':
+#            continue
         # make pipeline 
         pipeline = Pipeline([('scaler', StandardScaler()),
                              ('classifier', models[m]['model'])])
@@ -186,17 +188,15 @@ for f in folds:
         train_score = result.cv_results_['mean_train_score']
 
         #clf = models[m]['model'].set_params(**models[m]['best_params']) # set model parameters according to GridSearchCV
-        clf = result.best_estimator_ # get best estimator from hyperparameter search
-        scaler = StandardScaler().fit(X_train) # define Scaler and fit fold train data
-        X_train_scaled = scaler.transform(X_train)
-        clf.fit(X_train_scaled, y_train) # fit data
-        X_test_scaled = scaler.transform(X_test)
-        print(m, f, clf.score(X_test_scaled, y_test))
+        clf = result.best_estimator_ # get best estimator from hyperparameter search. NOTE: result from RandomizedSearchCV returns pipeline, which includes scaling and the best estimator
+        clf.fit(X_train, y_train) # fit data
+        
+        print(m, f, clf.score(X_test, y_test))
     
         # predictions for test array
         predf = pd.DataFrame()
         predf['truth'] = y_test
-        predf['predict_clf'] = clf.predict(X_test_scaled)
+        predf['predict_clf'] = clf.predict(X_test)
         # classification report
         print(m, metrics.classification_report(y_test, predf.predict_clf))
         cm = metrics.confusion_matrix(predf['truth'], predf['predict_clf'])
@@ -206,7 +206,7 @@ for f in folds:
         gdf_test = gdf[gdf.point_id.isin(folds[f][1])] # get test points
         gdf_test = gdf_test.dropna(subset=traincols)
         
-        gdf_test_arr = scaler.transform(gdf_test[traincols].to_numpy()) # scale for model
+        gdf_test_arr = gdf_test[traincols].to_numpy() # scale for model
         pred_proba = clf.predict_proba(gdf_test_arr) #predict
     
         # select columns
@@ -221,7 +221,7 @@ for f in folds:
         
         #permutation importance
         perm_result = permutation_importance(
-            clf, X_train_scaled, y_train, n_repeats=10, scoring='balanced_accuracy')
+            clf, X_train, y_train, n_repeats=10, scoring='balanced_accuracy')
         sorted_importances_idx = perm_result.importances_mean.argsort() # use if you want to plot by sorted values
         sorted_importances = pd.DataFrame(
             perm_result.importances[sorted_importances_idx].T,
@@ -278,14 +278,15 @@ for m in models:
     cols_to_plot = [col for col in df_perm.columns if m in col]
     # plot
     ax_i = list(models.keys()).index(m)
-    ax[ax_i] = df_perm[cols_to_plot].plot.box(vert=False, whis=10)
+#    ax[ax_i] = df_perm[cols_to_plot].plot.box(vert=False, whis=10)
+    ax[ax_i].boxplot(df_perm[cols_to_plot], vert=False)
     ax[ax_i].axvline(0, ls='--', color='black', alpha=0.6)
     ax[ax_i].set_yticklabels([])
     ax[0].set_yticklabels(traincols)
     ax[ax_i].set_title(m)
 fig.suptitle('Permutation importance')
 plt.tight_layout()
-plot_out = os.path.join(modeldir, prefix + '_' + '_perm_importance.png')
+plot_out = os.path.join(modeldir, prefix + '_perm_importance.png')
 plt.savefig(plot_out, dpi=300, format='PNG')
 
 # TODO create cm plots from fold results
@@ -343,6 +344,7 @@ plt.savefig(plot_out, dpi=300, format='PNG')
 X = df[traincols].to_numpy()
 y = le.transform(df.int_class) # transform
 groups = df['point_id'].to_numpy()
+sample_weights = compute_sample_weight('balanced', y)
 
 sgkf = StratifiedGroupKFold(n_splits=10, shuffle=False)
 # hyperparameter optimization
@@ -367,8 +369,8 @@ for m in models:
         json.dump(best_params, f_out, indent=4)
     
     # fit all data
-    X_scaled = StandardScaler().fit_transform(X)
-    clf.fit(X,y)
+    clf.fit(X, y_train)
+
     clf_out = os.path.join(modeldir, m + '_' + prefix + '.sav') # filename
     pickle.dump(clf, open(clf_out, 'wb'))
 
