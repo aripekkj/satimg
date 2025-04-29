@@ -111,7 +111,7 @@ for m in models:
 for p in proba_cols:
     gdf[p] = None
 # df to store permutation importance
-df_perm = pd.DataFrame()
+df_perm = pd.DataFrame(index=np.arange(0,100))
 # make stratified KFolds for points
 folds = dict()
 skf = StratifiedKFold(n_splits=10, random_state=42, shuffle=True)
@@ -232,8 +232,11 @@ for f in folds:
             perm_result.importances.T,
             columns=perm_cols,
             )
-        # concat results
-        df_perm = pd.concat([df_perm, importances])
+        # create index range
+        fold_n = int(f.split('_')[1])
+        index_range = np.arange(10*fold_n-10, 10*fold_n)
+        # set values
+        df_perm.loc[index_range, perm_cols] = importances.values
         
 # save model dict
 models_dict_out = os.path.join(modeldir, 'models_cv_result.npy')
@@ -369,7 +372,7 @@ for m in models:
         json.dump(best_params, f_out, indent=4)
     
     # fit all data
-    clf.fit(X, y_train)
+    clf.fit(X, y)
 
     clf_out = os.path.join(modeldir, m + '_' + prefix + '.sav') # filename
     pickle.dump(clf, open(clf_out, 'wb'))
