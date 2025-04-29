@@ -155,7 +155,7 @@ for f in folds:
     #     print('Classes in test set', np.unique(y_train[test_index] ,return_counts=True))
     # hyperparameter optimization
     for m in models:
-        if m != 'XGB':
+        if m != 'RF':
             continue
         # make pipeline 
         pipeline = Pipeline([('scaler', StandardScaler()),
@@ -216,7 +216,7 @@ for f in folds:
         
         # predicted value to gdf
         gdf.loc[gdf_test.index, 'test_fold'] = f
-
+ 
 
 # save model dict
 models_dict_out = os.path.join(modeldir, 'models_cv_result.npy')
@@ -249,8 +249,8 @@ for m in models:
 
 # permutation importance
 from sklearn.inspection import permutation_importance
+X_train = StandardScaler().fit_transform(X_train)
 for m in models:
-    X_train = StandardScaler().fit_transform(X_train)
     model = models[m]['model'].fit(X_train, y_train)
     perm_result = permutation_importance(
         model, X_train, y_train, n_repeats=10, scoring='accuracy')
