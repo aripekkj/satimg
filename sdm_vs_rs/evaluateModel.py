@@ -19,6 +19,7 @@ import json
 import pickle
 from sklearnex import patch_sklearn 
 patch_sklearn()
+from sklearn.inspection import permutation_importance
 from sklearn import metrics
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -101,7 +102,6 @@ models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balance
 gdf['test_fold'] = None
 # create columns for all class probabilities
 proba_cols = []
-
 for m in models:
     for k in sorted(gdf.hab_class_ml.unique()):
         proba_col_name = 'proba_' + m + '_' + str(k)
@@ -109,7 +109,8 @@ for m in models:
 # add columns to dataframe
 for p in proba_cols:
     gdf[p] = None
-
+# df to store permutation importance
+df_perm = pd.DataFrame()
 # make stratified KFolds for points
 folds = dict()
 skf = StratifiedKFold(n_splits=10, random_state=42, shuffle=True)
@@ -185,10 +186,11 @@ for f in folds:
         train_score = result.cv_results_['mean_train_score']
 
         #clf = models[m]['model'].set_params(**models[m]['best_params']) # set model parameters according to GridSearchCV
-        clf = result.best_estimator_
-        X_train_scaled = StandardScaler().fit_transform(X_train)
+        clf = result.best_estimator_ # get best estimator from hyperparameter search
+        scaler = StandardScaler().fit(X_train) # define Scaler and fit fold train data
+        X_train_scaled = scaler.transform(X_train)
         clf.fit(X_train_scaled, y_train) # fit data
-        X_test_scaled = StandardScaler().fit_transform(X_test)
+        X_test_scaled = scaler.transform(X_test)
         print(m, f, clf.score(X_test_scaled, y_test))
     
         # predictions for test array
@@ -204,7 +206,7 @@ for f in folds:
         gdf_test = gdf[gdf.point_id.isin(folds[f][1])] # get test points
         gdf_test = gdf_test.dropna(subset=traincols)
         
-        gdf_test_arr = StandardScaler().fit_transform(gdf_test[traincols].to_numpy()) # to array
+        gdf_test_arr = scaler.transform(gdf_test[traincols].to_numpy()) # scale for model
         pred_proba = clf.predict_proba(gdf_test_arr) #predict
     
         # select columns
@@ -216,15 +218,40 @@ for f in folds:
         
         # predicted value to gdf
         gdf.loc[gdf_test.index, 'test_fold'] = f
- 
-
+        
+        #permutation importance
+        perm_result = permutation_importance(
+            clf, X_train_scaled, y_train, n_repeats=10, scoring='balanced_accuracy')
+        sorted_importances_idx = perm_result.importances_mean.argsort() # use if you want to plot by sorted values
+        sorted_importances = pd.DataFrame(
+            perm_result.importances[sorted_importances_idx].T,
+            columns=traincols[sorted_importances_idx],
+            )
+        perm_cols = [m + col for col in traincols]
+        importances = pd.DataFrame(
+            perm_result.importances.T,
+            columns=perm_cols,
+            )
+        # concat results
+        df_perm = pd.concat([df_perm, importances])
+        
 # save model dict
 models_dict_out = os.path.join(modeldir, 'models_cv_result.npy')
 np.save(models_dict_out, models)
 # save param dict
-param_dict_out = os.path.join(modeldir, 'best_params.json')
-with open(param_dict_out, 'w') as f_out:
-    json.dump(param_dict, f_out, indent=4)
+#param_dict_out = os.path.join(modeldir, 'best_params.json')
+#with open(param_dict_out, 'w') as f_out:
+#    json.dump(param_dict, f_out, indent=4)
+
+# save prediction on sampled points
+gdf[proba_cols] = gdf[proba_cols].astype(float)
+
+gdf_out = os.path.join(os.path.dirname(fp_pts), prefix + '_preds.gpkg')
+gdf.to_file(gdf_out, engine='pyogrio')
+
+# ------------------------------------ #
+# create plots
+# ------------------------------------ #
 
 for m in models:
 #    if m != 'RF':
@@ -244,28 +271,18 @@ for m in models:
     title_str = m + ': Mean balanced accuracy from \n CV and hyperparameter search' 
     plt.suptitle(title_str)
     plt.tight_layout()
-    plot_out = os.path.join(modeldir, prefix + '_' + m + '_learningcurve.png')
+    plot_out = os.path.join(modeldir, prefix + '_' + m + '_CV_accuracy.png')
     plt.savefig(plot_out, dpi=300, format='PNG')
 
-# permutation importance
-from sklearn.inspection import permutation_importance
-X_train = StandardScaler().fit_transform(X_train)
+#TODO combine to single plot
+# plot permutation importance
+
 for m in models:
-    model = models[m]['model'].fit(X_train, y_train)
-    perm_result = permutation_importance(
-        model, X_train, y_train, n_repeats=10, scoring='accuracy')
-    sorted_importances_idx = perm_result.importances_mean.argsort() # use if you want to plot by sorted values
-    sorted_importances = pd.DataFrame(
-        perm_result.importances[sorted_importances_idx].T,
-        columns=traincols[sorted_importances_idx],
-        )
-    importances = pd.DataFrame(
-        perm_result.importances.T,
-        columns=traincols,
-        )
+    # select columns to plot
+    cols_to_plot = [col for col in df_perm.columns if m in col]
     # plot
     fig, ax = plt.subplots()
-    ax = importances.plot.box(vert=False, whis=10)
+    ax = df_perm.plot.box(vert=False, whis=10)
     ax.axvline(0, ls='--', color='black', alpha=0.6)
     ax.set_title(m + ' permutation importance')
     plt.tight_layout()
@@ -321,19 +338,33 @@ for m in models:
     #plt.savefig(os.path.join(os.path.dirname(fp), 'plots', 'filename.png'), dpi=150, format='PNG')
 #----------------------------------#
 
-# save
-gdf[proba_cols] = gdf[proba_cols].astype(float)
 
-gdf_out = os.path.join(os.path.dirname(fp_pts), prefix + '_preds.gpkg')
-gdf.to_file(gdf_out, engine='pyogrio')
-
-# save models
-X = StandardScaler.fit_transform(df[traincols].to_numpy()) # transform
+# ------------------------------------ #
+# fit all data and find best params for predicting for the full image
+X = df[traincols].to_numpy()
 y = le.transform(df.int_class) # transform
+groups = df['point_id'].to_numpy()
+
+sgkf = StratifiedGroupKFold(n_splits=10, shuffle=False)
+# hyperparameter optimization
 for m in models:
-    clf = models[m]['model']
+    # make pipeline 
+    pipeline = Pipeline([('scaler', StandardScaler()),
+                         ('classifier', models[m]['model'])])
+    pparams = pipeline.get_params()
+    param_dict = dict()
+    for p in models[m]['params']:
+        for pp in pparams:
+            if p in pp:
+                param_dict[pp] = models[m]['params'].get(p)
+
+    # set estimator params
+    search = RandomizedSearchCV(pipeline, param_distributions=param_dict, scoring='balanced_accuracy', cv=sgkf, return_train_score=True, n_iter=10, n_jobs=-1)
+    result = search.fit(X, y, groups=groups)
+    clf = result.best_estimator_
     # fit all data
-    clf.fit(X, y)
+    X_scaled = StandardScaler().fit_transform(X)
+    clf.fit(X,y)
     clf_out = os.path.join(modeldir, m + '_' + prefix + '.sav') # filename
     pickle.dump(clf, open(clf_out, 'wb'))
 
