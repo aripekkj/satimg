@@ -238,10 +238,6 @@ for f in folds:
 # save model dict
 models_dict_out = os.path.join(modeldir, 'models_cv_result.npy')
 np.save(models_dict_out, models)
-# save param dict
-#param_dict_out = os.path.join(modeldir, 'best_params.json')
-#with open(param_dict_out, 'w') as f_out:
-#    json.dump(param_dict, f_out, indent=4)
 
 # save prediction on sampled points
 gdf[proba_cols] = gdf[proba_cols].astype(float)
@@ -276,18 +272,21 @@ for m in models:
 
 #TODO combine to single plot
 # plot permutation importance
-
+fig, ax = plt.subplots(1,3)
 for m in models:
     # select columns to plot
     cols_to_plot = [col for col in df_perm.columns if m in col]
     # plot
-    fig, ax = plt.subplots()
-    ax = df_perm.plot.box(vert=False, whis=10)
-    ax.axvline(0, ls='--', color='black', alpha=0.6)
-    ax.set_title(m + ' permutation importance')
-    plt.tight_layout()
-    plot_out = os.path.join(modeldir, prefix + '_' + m + '_perm_importance.png')
-    plt.savefig(plot_out, dpi=300, format='PNG')
+    ax_i = list(models.keys()).index(m)
+    ax[ax_i] = df_perm[cols_to_plot].plot.box(vert=False, whis=10)
+    ax[ax_i].axvline(0, ls='--', color='black', alpha=0.6)
+    ax[ax_i].set_yticklabels([])
+    ax[0].set_yticklabels(traincols)
+    ax[ax_i].set_title(m)
+fig.suptitle('Permutation importance')
+plt.tight_layout()
+plot_out = os.path.join(modeldir, prefix + '_' + '_perm_importance.png')
+plt.savefig(plot_out, dpi=300, format='PNG')
 
 # TODO create cm plots from fold results
 # # try model performance on test
@@ -362,6 +361,11 @@ for m in models:
     search = RandomizedSearchCV(pipeline, param_distributions=param_dict, scoring='balanced_accuracy', cv=sgkf, return_train_score=True, n_iter=10, n_jobs=-1)
     result = search.fit(X, y, groups=groups)
     clf = result.best_estimator_
+    best_params = result.best_params_
+    best_params_out = os.path.join(modeldir, m + '_best_params.json')
+    with open(best_params_out, 'w') as f_out:
+        json.dump(best_params, f_out, indent=4)
+    
     # fit all data
     X_scaled = StandardScaler().fit_transform(X)
     clf.fit(X,y)
