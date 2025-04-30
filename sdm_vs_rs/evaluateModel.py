@@ -241,12 +241,13 @@ for f in folds:
 # save model dict
 models_dict_out = os.path.join(modeldir, 'models_cv_result.npy')
 np.save(models_dict_out, models)
-
 # save prediction on sampled points
 gdf[proba_cols] = gdf[proba_cols].astype(float)
-
 gdf_out = os.path.join(os.path.dirname(fp_pts), prefix + '_preds.gpkg')
 gdf.to_file(gdf_out, engine='pyogrio')
+# save permutation importances dataframe
+perm_df_out = os.path.join(modeldir, 'permutation_importances.csv')
+df_perm.to_csv(perm_df_out, sep=';')
 
 # ------------------------------------ #
 # create plots
