@@ -9,6 +9,7 @@ import sys
 import os
 import glob
 import numpy as np
+import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import rasterio as rio
@@ -16,6 +17,8 @@ import rioxarray as rxr
 import time
 import json
 import pickle
+from sklearnex import patch_sklearn 
+patch_sklearn()
 from sklearn import metrics
 from sklearn.preprocessing import normalize, StandardScaler
 from sklearn.svm import SVC
@@ -32,35 +35,37 @@ basedir = sys.argv[1]
 fp_pts = sys.argv[2]
 use_bathymetry = True
 
-# point file to get habitat classes
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_habitat_data_ml_encoded_LSxGreece_10m.gpkg'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/Black_Sea_habitat_data_ml_encoded_LSxBLK_20200313.gpkg'
-
+# read pts to get class names
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
 print(gdf[['hab_class_ml', 'int_class']].groupby('hab_class_ml').mean())
 habitats = sorted(gdf.hab_class_ml.unique().tolist())
 # create band descriptions
 descriptions = [i + ' prob' for i in habitats]
+# get pca variance
+fp_pca = os.path.join(basedir, 'pca', '*pca_var.csv')
+pcafile = [f for f in glob.glob(fp_pca)][0]
+pcavar = pd.read_csv(pcafile, sep=',')
+# compute difference between rows
+pcavar['diff'] = pcavar['PCA_var'].diff()
+# get threshold where explained variance increases < 1
+threshold = pcavar[pcavar['diff'] < 1].index[0]
+# list of pca cols to select
+pcs = list(np.arange(1, threshold+1))
 
-fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Netherlands/S2/20171015/S2_LSxNL_20171015_v101_rrs_clip.tif'
-fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/S2_LSxBLK_20200313_v1_3035_masked.tif'
-fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/S2_LSxGreece_10m_20230828_v101_3035_clip_bands.tif'
-fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Denmark/S2_LS2a_20220812_v1_3035.tif'
-fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/S2_LS3Norway_C_10m_20170721_v1_clip.tif'
-fp_img = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Estonia/S2_LS1Est_2015_merge.tif'
 
-# paths for rasters
-basedir = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea'
 tiledir = os.path.join(basedir, 'tiles')
 # model filepath
 modeldir = os.path.join(basedir, 'model')
 # list models
 models = [m for m in glob.glob(os.path.join(modeldir, '*.sav'))]
+#scaler_fp = os.path.join(modeldir, 'scaler.sav')
+#models.remove(scaler_fp) # remove scaler from model list
+#scaler = pickle.load(open(scaler_fp, 'rb')) # load scaler
 # map tilenames
 tiles = [os.path.basename(file).split('.')[0][-3:] for file in glob.glob(os.path.join(tiledir, '*.tif'))]
 
 
-def predict(tileid, basedir, model_fp, band_descriptions, use_bathymetry):
+def predict(tileid, basedir, model_fp, band_descriptions, pcs, use_bathymetry):
     # find files with tile suffix
     fp_tile = glob.glob(os.path.join(basedir, 'tiles', '*' + tileid + '.tif'))[0]
     fp_pca = glob.glob(os.path.join(basedir, 'pca', '*' + tileid + '.tif'))[0]
@@ -72,7 +77,7 @@ def predict(tileid, basedir, model_fp, band_descriptions, use_bathymetry):
         meta = src.meta
     # pca
     with rio.open(fp_pca) as src:
-        pca = src.read((1,2,3))
+        pca = src.read(pcs)
     if use_bathymetry == True:
         with rio.open(fp_bathy) as src:
             bathy = src.read()
@@ -93,7 +98,7 @@ def predict(tileid, basedir, model_fp, band_descriptions, use_bathymetry):
     pca = pca.transpose(2,0,1)
     if use_bathymetry == True:
         bathy = bathy.transpose(2,0,1)
-    
+        
     #img_stack = img
     del(img)
     gc.collect()
@@ -104,8 +109,7 @@ def predict(tileid, basedir, model_fp, band_descriptions, use_bathymetry):
     del(img_stack)
     gc.collect()
     # standardize data
-    scaler = StandardScaler().fit(img_re)
-    img_re = scaler.transform(img_re)
+#    img_re = scaler.transform(img_re)
 #    img_re_shape = img_re.shape
 
     # read model 
@@ -154,7 +158,7 @@ def predict(tileid, basedir, model_fp, band_descriptions, use_bathymetry):
     # save
     with rio.open(outfile, 'w', **upmeta, compress='LZW') as dst:
         dst.write(predicted.astype(upmeta['dtype']))
-        dst.descriptions = tuple(descriptions)
+        dst.descriptions = tuple(band_descriptions)
     # -------------------------------------------------------------- #
 
 
@@ -162,7 +166,7 @@ def predict(tileid, basedir, model_fp, band_descriptions, use_bathymetry):
 delayed_funcs = []
 for t in tiles:
     for m in models:
-        pred = delayed(predict(t, basedir, m, descriptions, use_bathymetry))
+        pred = delayed(predict(t, basedir, m, descriptions, pcs, use_bathymetry))
         delayed_funcs.append(pred)    
 # compute
 compute(delayed_funcs)
