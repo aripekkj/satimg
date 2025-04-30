@@ -92,10 +92,12 @@ models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balance
                            "bootstrap":[True,False]}},
           'SVM': {'model': SVC(probability=True, class_weight='balanced'),
                   'params': {"kernel": ['rbf'], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01]}},
-          'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0, device='cuda', num_class=len(np.unique(df.int_class))),
+          'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0, device='cpu', num_class=len(np.unique(df.int_class))),
                   'params': {'objective': ['multi:softmax'], 'learning_rate':[0.0001, 0.001, 0.01, 0.1, 0.3],
                              'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6],
-                             'subsample': [0.8, 0.5]}
+                             'subsample': [0.8, 0.5], 
+                             'max_delta_step':[0,1], 
+                             'min_child_weight': [1,3,5]}
                   }
           }
 
