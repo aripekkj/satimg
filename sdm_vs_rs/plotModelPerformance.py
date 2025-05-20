@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn import metrics
@@ -36,11 +38,12 @@ CLI.add_argument(
     help='Filepath for cv_result .npy')
 args = CLI.parse_args()
 
-fp = args.ddirectory
+fp = args.directory
 fp_pts = args.fp_pts
 fp_npy = args.cv_result
 
 # fp
+#fp = '/mnt/d/users/e1008409/MK/DNASense/FIN/2023/model_10fold'
 #fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece'
 #fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece/Greece_habitat_data_ml_filtered.gpkg'
 #fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece/model/models_cv_result.npy'
@@ -50,11 +53,12 @@ modeldir = os.path.dirname(fp_npy)
 models = np.load(fp_npy, allow_pickle=True).item()
 
 # plot hyperparameter optimization results
-ls = ['--', '.', '<']
+ls = ['--', '-.', ':']
+fig, ax = plt.subplots()
+handles, labels = ax.get_legend_handles_labels()
 for m in models:
-    if m != 'RF':
-        continue
-    fig, ax = plt.subplots()    
+#    if m != 'RF':
+#        continue    
     cv_fold_keys = [key for key in models[m].keys() if 'cv_result' in key]
     mean_train = []
     mean_test = []
@@ -64,11 +68,23 @@ for m in models:
         mean_test.append(models[m][c]['mean_test_score'])
     ax.plot(np.mean(mean_train, axis=1), color='blue', label='train', ls=ls[n])
     ax.plot(np.mean(mean_test, axis=1), color='orange', label='test', ls=ls[n])
-    ax.set_xticks(np.arange(0,10,1))
-    ax.set_xticklabels(np.arange(1,11,1))
-    ax.set_xlabel('CV fold')
-    ax.set_title(m)
-title_str = 'Mean balanced accuracy from \n CV and hyperparameter search'
+    line = Line2D([0], [0], linestyle=ls[n], color='black', label=m)
+    handles.append(line)
+patch1 = mpatches.Patch(color='blue', label='Train')
+patch2 = mpatches.Patch(color='orange', label='Test')
+handles.extend([patch1, patch2])
+ax.set_xticks(np.arange(0,10,1))
+ax.set_xticklabels(np.arange(1,11,1))
+ax.set_yticks(np.arange(0,1.1,0.1))
+yrange = np.arange(0,1.1,0.1).round(1)
+ax.set_yticklabels(yrange)
+ax.set_xlabel('CV fold')
+#handles, labels = ax.get_legend_handles_labels()
+
+#legend = ax.legend(handles, labels, ncol=1, frameon=True,
+#                    loc='upper right', bbox_to_anchor=(1.1,1.0))
+plt.legend(handles=handles)
+title_str = 'Mean balanced accuracy from \n CV hyperparameter search'
 plt.suptitle(title_str)
 plt.tight_layout()
 plot_out = os.path.join(modeldir, 'models_CV_accuracy.png')
@@ -78,8 +94,7 @@ plt.savefig(plot_out, dpi=300, format='PNG')
 
 # load
 models = np.load(fp_npy, allow_pickle=True).item()
-# model dir
-modeldir = os.path.join(fp, 'model')
+
 prefix = os.path.basename(fp_pts).split('_')[0]
 # read data
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
@@ -142,8 +157,8 @@ for f in folds:
     predf['fold'] = f
 
     for m in models:
-        if m != 'RF':
-            continue        
+#        if m != 'RF':
+#            continue        
         # get tuned hyperparameters
         pparams = models[m]['params'] 
         param_dict = dict()
@@ -185,11 +200,11 @@ for f in folds:
         # store accuracies to df
         fold_oa = m + '_oa'
         pacc_cols = [m  + '_' + c + '_pa' for c in classes]
-        oacc_cols = [m  + '_' + c + '_oa' for c in classes]
+        uacc_cols = [m  + '_' + c + '_ua' for c in classes]
         
         acc_df.loc[f, fold_oa] = o_accuracy
         acc_df.loc[f, pacc_cols] = p_accuracy
-        acc_df.loc[f, oacc_cols] = o_accuracy
+        acc_df.loc[f, uacc_cols] = u_accuracy
         
 
     # concat result
@@ -197,6 +212,19 @@ for f in folds:
 # redefine index
 pred_df.index = np.arange(0,len(pred_df))
 cms = np.array(cms)
+# dropna
+acc_df = acc_df.dropna()
+# save dataframe
+acc_df_out = os.path.join(modeldir, 'acc_df.csv')
+acc_df.to_csv(acc_df_out, sep=';')
+# save described dataframe
+acc_df_desc = acc_df.describe()
+acc_df_desc_out = os.path.join(modeldir, 'acc_df_describe.csv')
+acc_df_desc.to_csv(acc_df_desc_out, sep=';')
+
+
+# read 
+acc_df = pd.read_csv(acc_df_out, sep=';')
 
 # plot overall accuracies
 fig, ax = plt.subplots()
@@ -204,10 +232,63 @@ print('Average overall accuracy %.2f' % (np.mean(acc_df[m+'_oa'])))
 ax_i = list(models.keys()).index(m)
 # plot
 ax.boxplot(acc_df[['RF_oa', 'SVM_oa', 'XGB_oa']], vert=True)
-ax.set_title('Overall accuracy')
+ax.set_title('CV model overall accuracy')
 ax.set_xticklabels(['RF', 'SVM', 'XGB'])
 plt.tight_layout()
-plt.savefig(plot_out, dpi=300, format='PNG')
+oa_out = os.path.join(modeldir, 'OA_accuracies.png')
+plt.savefig(oa_out, dpi=300, format='PNG')
+
+# multiplot for users and producers accuracy for each class
+nclass = len(classes)
+ncol = np.arange(0,2,1)
+nrow = np.arange(0,nclass)
+ 
+hablist = list(np.unique(gdf.hab_class_ml))
+fig, ax = plt.subplots(len(nrow), 2, figsize=(12,8), sharex=True, sharey=True)
+
+for hab in hablist:
+    cols_to_plot = [h for h in acc_df.columns if hab in h]
+    
+    # select producer's and user's accuracy columns
+    cols_pa = [c for c in cols_to_plot if 'pa' in c]
+    cols_ua = [c for c in cols_to_plot if 'ua' in c]
+    # Filter data using np.isnan
+    plot_pa = acc_df[cols_pa].to_numpy()
+    mask = ~np.isnan(plot_pa)
+    filtered_pa = [d[ma] for d, ma in zip(plot_pa.T, mask.T)]
+    
+    plot_ua = acc_df[cols_ua].to_numpy()
+    mask = ~np.isnan(plot_ua)
+    filtered_ua = [d[ma] for d, ma in zip(plot_ua.T, mask.T)]
+    
+    nr = hablist.index(hab)
+    ax[nr,0].set_title(hab, x=1)
+    ax[nr,0].axhline(0.5, ls='--', lw=0.5, alpha=0.4, color='black')    
+    # plot
+    ax[nr,0].boxplot(filtered_pa, vert=True) # acc_df[cols_pa]    
+    ax[nr,1].boxplot(filtered_ua, vert=True)
+    ax[nr,1].axhline(0.5, ls='--', lw=0.5, alpha=0.4, color='black')
+    
+    if nr == len(nrow)-1:           
+        ax[nr,0].set_xticks([1,2,3], labels=list(models.keys()))
+        ax[nr,0].set_xlabel('Producers accuracy')
+        ax[nr,1].set_xlabel('Users accuracy')
+
+plt.tight_layout()
+fig.suptitle('CV model accuracies on test set', y=1.05)
+plot_ua_pa_out = os.path.join(modeldir, 'P_U_accuracies.png')
+plt.savefig(plot_ua_pa_out, dpi=300, format='PNG')
+
+
+
+    # row, col params for multiplot
+#    if i[0] < pr:
+#        r = 0
+#        c = i[0] -1
+#    elif i[0] >= pc:
+#        r = 1
+#        c = i[0] - pc -1
+
 
 # # save confusion matrix dataframe as csv
 # cmdf_name = m + '_cm.csv'
