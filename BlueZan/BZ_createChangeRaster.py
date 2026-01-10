@@ -27,7 +27,7 @@ def readRaster(fp):
     
     return img, profile
 
-def getLabels(fp_annt, label):
+def getLabels(fp_annt):
     gdf = gpd.read_file(fp_annt)
     labels = sorted(gdf.label.unique())
 
@@ -53,6 +53,9 @@ def change(image1, image2, fp_annt, label):
     change = np.where((img1 == cl) & (img2 == cl), 1, 0)
     change = np.where((img1 == cl) & (img2 != cl), 2, change)
     change = np.where((img1 != cl) & (img2 == cl), 3, change)
+    # mask nodata areas
+    change = np.where(img1 == p1['nodata'], 0, change)
+    change = np.where(img2 == p2['nodata'], 0, change)
     
     # check if spaces in label name
     test = label.split(" ")
