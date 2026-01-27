@@ -17,9 +17,8 @@ import pickle
 
 
 # filepaths
-fp_img = '/mnt/d/users/e1008409/MK/sansibar/planet/ChwakaBay_04-2024_psscene_analytic_8b_sr_udm2/deglint/20240430_3B_AnalyticMS_SR_8b_merge_deglint.tif' # full filepath to image to be classified
-fp_img = '/mnt/d/users/e1008409/MK/sansibar/S2/Chwaka/deglint/S2_2025_chwaka_deglint.tif' # full filepath to image to be classified
-fp_model = '/mnt/d/users/E1008409/MK/sansibar/Opetusdatat/classification_2025/randomForest25.sav' # full filepath to model
+fp_img = 'D:/BlueZan/S2/Chwaka/deglint/S2_2025_chwaka_deglint.tif' # full filepath to image to be classified
+fp_model = 'D:/BlueZan/S2/Chwaka/deglint/classification_2025/randomForest25.sav' # full filepath to model
 
 # No need to edit below
 # -------------------------------------------------------------- #

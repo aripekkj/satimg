@@ -23,8 +23,11 @@ import pickle
 
 
 # filepaths
-fp_img = '/mnt/d/users/e1008409/MK/sansibar/S2/Chwaka/deglint/S2_2025_chwaka_deglint.tif' # full filepath to image
-fp = '/mnt/d/users/E1008409/MK/sansibar/Opetusdatat/Chwaka_annotation.gpkg' # full filepath to annotation polygons
+fp_img = 'D:/BlueZan/S2/Chwaka/deglint/S2_2025_chwaka_deglint.tif' # filepath for satellite image
+fp = 'D:/BlueZan/shapes/Chwaka_annotation.gpkg' # filepath for field points
+
+#fp_img = '/mnt/d/users/e1008409/MK/sansibar/S2/Chwaka/deglint/S2_2025_chwaka_deglint.tif' # full filepath to image
+#fp = '/mnt/d/users/E1008409/MK/sansibar/Opetusdatat/Chwaka_annotation.gpkg' # full filepath to annotation polygons
 
 # Edit lines below to change the number of folds in cross-validation and which model to use
 # set how many splits for CV

@@ -14,10 +14,11 @@ import rasterio as rio
 import numpy as np
 
 
-fp1 = '/mnt/d/users/E1008409/MK/sansibar/Opetusdatat/classification/randomForest_classification_s2.tif'
-fp2 = '/mnt/d/users/E1008409/MK/sansibar/Opetusdatat/classification_2025/randomForest25_classification_s2_2025.tif'
-fp_annt = '/mnt/d/users/E1008409/MK/sansibar/Opetusdatat/Chwaka_annotation.gpkg'
-label = 'Seagrass meadow'
+fp1 = 'D:/BlueZan/S2/Chwaka/classification/randomForest_classification_s2.tif'
+fp2 = 'D:/BlueZan/S2/Chwaka/classification_2025/randomForest25_classification_s2_2025.tif'
+fp_annt = 'D:/BlueZan/shapes/Chwaka_annotation.gpkg'
+label = 'Seagrass meadow' # name for the habitat to select
+column_name = 'label' # column name for habitat types
 
 def readRaster(fp):
     # read 
@@ -27,9 +28,9 @@ def readRaster(fp):
     
     return img, profile
 
-def getLabels(fp_annt):
+def getLabels(fp_annt, column_name):
     gdf = gpd.read_file(fp_annt)
-    labels = sorted(gdf.label.unique())
+    labels = sorted(gdf[column_name].unique())
 
     return labels
 
@@ -43,7 +44,7 @@ def change(image1, image2, fp_annt, label):
     img1, p1 = readRaster(fp1)
     img2, p2 = readRaster(fp2)
     # get labels
-    labels = getLabels(fp_annt)
+    labels = getLabels(fp_annt, column_name)
     # get label index
     l_ind = getLabelIndex(labels, label)
     # select class by index. Exclude 0 as nodata
@@ -63,7 +64,7 @@ def change(image1, image2, fp_annt, label):
         label = label.replace(" ", "_")
     
     # save change raster
-    outfile = os.path.join(os.path.dirname(fp_annt), label + '_change.tif')
+    outfile = os.path.join(os.path.dirname(fp_annt), label + '_change_test.tif')
     with rio.open(outfile, 'w', **p1) as dst:
         dst.write(change)
     
