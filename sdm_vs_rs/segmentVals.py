@@ -32,11 +32,17 @@ from sklearn.preprocessing import LabelEncoder
 from dask import delayed
 from dask import compute
 from collections import Counter
+from rasterio.features import shapes
+from shapely.geometry import shape
+
+
+
+from spatialkfold.blocks import spatial_blocks 
 
 # set whether to check for duplicates within segments
 check_duplicates = True
 use_bathymetry = True
-save_intermediates = False # set whether to save intermediate segmentation results
+save_intermediates = True # set whether to save intermediate segmentation results
 
 fp = sys.argv[1]
 fp_pts = sys.argv[2]
@@ -46,11 +52,12 @@ if use_bathymetry == True:
 # DNASense
 fp = '/mnt/d/users/e1008409/MK/DNASense/FIN/s2_ncdf/20180715_T34_merge_nan.tif'
 fp_bathy = '/mnt/d/users/e1008409/MK/DNASense/FIN/bathymetry_nan.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/DNASense/FIN/Finland_habitat_data_ml_new_32634.gpkg'
+fp_pts = '/mnt/d/users/e1008409/MK/DNASense/FIN/Finland_habitat_data_ml_2016-2023.gpkg'
 
 # Finland
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/S2_LS1_20180715_v101_3035_clip.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/Finland_habitat_data_ml_5m_env_sampled_encoded_LS1_20180715.gpkg'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/Finland_habitat_data_ml_5m_env_sampled.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/bathymetry/depth_selkameri_s_3035_.tif'
 # Finland VHR
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland_VHR/WorldView2_2014_09_08_10_36_23_L2W_Rrs_3035.tif'
 fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland_VHR/FinlandVHR_habitat_data_ml_5m_env_sampled_encoded_LS1_20180715.gpkg'
@@ -72,9 +79,9 @@ fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/Black_Sea_habit
 fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/BlackSea/bathymetry/bathymetry_res_10m_3035.tif'
 
 # Greece
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/S2_LSxGreece_10m_20230828_v101_3035_clip_bands_masked.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/Greece_habitat_data_ml.gpkg'
-fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Kreikka/bathymetry/bathymetry_10m_3035.tif'
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece_spatial_block/S2_LSxGreece_10m_20230828_v101_3035_clip_bands_masked.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece_spatial_block/Greece_habitat_data_ml.gpkg'
+fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece_spatial_block/bathymetry/bathymetry_10m_3035.tif'
 
 # Norway
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Norway/S2_LS3Norway_C_10m_20170721_v1_clip_ndwimasked.tif'
@@ -153,8 +160,6 @@ def sampleRaster(raster_fp, geodataframe_fp):
     return geodf
 
 def sampleRasterToGDF(raster_fp, geodataframe):
-    # read points
-    #gdf = gpd.read_file(geodataframe_fp, engine='pyogrio')
     # sample coords
     with rio.open(raster_fp) as src:
         meta = src.meta
@@ -215,6 +220,53 @@ def maskAndSave(data_array, tiledir, sfx_w, sfx_h):
     xds_c.rio.to_raster(fp_out, compress='LZW')
     return xds_c, fp_out
 
+def raster_to_gpkg(
+    raster_path: str,
+    gpkg_path: str,
+    layer_name: str = "vectorized",
+    clean_geometries: bool = False
+):
+    """
+    Vectorize a raster and save the polygons to a GeoPackage.
+
+    Parameters
+    ----------
+    raster_path : str
+        Path to the input raster (.tif)
+    gpkg_path : str
+        Output GeoPackage path
+    layer_name : str
+        Name of the layer inside the GPKG
+    clean_geometries : bool
+        If True, applies geometry.buffer(0) to fix topology
+    """
+
+    with rio.open(raster_path) as src:
+        image = src.read(1)
+        mask = image != src.nodata
+        transform = src.transform
+        crs = src.crs
+
+        # Extract shapes
+        records = [
+            {"geometry": shape(geom), "value": int(value)}
+            for geom, value in shapes(image, mask=mask, transform=transform)
+        ]
+
+    # Convert to GeoDataFrame
+    gdf = gpd.GeoDataFrame(records, crs=crs)
+
+    # Optional geometry cleaning
+    if clean_geometries:
+        gdf["geometry"] = gdf.geometry.buffer(0)
+    # dissolve
+    gdf = gdf.dissolve('value')
+    # Save to GPKG
+    gdf.to_file(gpkg_path, layer=layer_name, driver="GPKG")
+
+    return gdf
+
+
 
 basedir = os.path.dirname(fp)
 tiledir = os.path.join(basedir, 'tiles')
@@ -230,6 +282,7 @@ with rio.open(fp) as src:
 max_dim = max(xds.shape)
 # set tile size
 tilesize = math.ceil(max_dim/2)
+tilesize = 10000
 # compute bounds for tiles
 fw = np.arange(0, int(profile['width'] / tilesize)+1, 1) # how many full tiles fits in width
 fh = np.arange(0, int(profile['height'] / tilesize)+1, 1) # how many full tiles fits in height
@@ -242,8 +295,8 @@ gdf_out = gpd.GeoDataFrame()
 cols = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7', 'Band8', 'Band9', 'Band10']
 pcacols = ['pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7', 'pca8', 'pca9', 'pca10']
 # VHR
-cols = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7']
-pcacols = ['pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7']
+#cols = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band6', 'Band7']
+#pcacols = ['pca1', 'pca2', 'pca3', 'pca4', 'pca5', 'pca6', 'pca7']
 
 
 # read
@@ -253,7 +306,8 @@ print(gdf.hab_class_ml.unique())
 prefix_split = os.path.basename(fp).split('_')
 prefix = prefix_split[1] + '_' + prefix_split[2]
 
-#TODO move to another script 
+
+#TODO move to another script ?
 # label encode strings class
 le = LabelEncoder()
 le.fit(gdf.hab_class_ml.unique())
@@ -263,8 +317,8 @@ gdf['int_class'] = gdf['int_class'] + 1 # start unique classes with 1
 gdf['point_id'] = gdf.index + 1
 # save
 fp_pts_encoded = fp_pts.split('.gpkg')[0] + '_encoded.gpkg'
-#if gdf.crs != 3035: # check CRS
-#    gdf = gdf.to_crs(3035)
+if gdf.crs != xds.rio.crs: # check CRS
+    gdf = gdf.to_crs(xds.rio.crs)
 gdf.to_file(fp_pts_encoded, driver='GPKG', engine='pyogrio')
 
 
@@ -304,7 +358,7 @@ for i in fw:
         # save pcavar_df
         df_pcavar.to_csv(os.path.join(pcadir, prefix + '_pca_var.csv'))
         # compute difference between rows
-        df_pcavar['diff'] = df_pcavar['PCA_var'].diff(axis=0)
+        df_pcavar['diff'] = df_pcavar['PCA_var'].diff()
         # get threshold where explained variance increases < 1
         threshold = df_pcavar[df_pcavar['diff'] < 1].index[0]-1
         
@@ -397,8 +451,8 @@ for i in fw:
             gdf['bathymetry'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
             gdf = gdf.drop('sampled', axis=1)
         
-        # get segment ids where is field data
-        segments_ids = gdf.segments[gdf.segments > 0].unique()
+        # get segment ids with multiple points
+        segments_ids = gdf.segments[gdf.duplicated('segments', keep=False)]
         # create mask for segmented area with field data 
         segments_fd = np.zeros(shape=segments.shape)
         for segid in segments_ids:
@@ -411,7 +465,7 @@ for i in fw:
         n2 = 3
         s2 = s/2
         start = time.time()
-        segments2 = felzenszwalb(img[1:4], scale=s2, sigma=sig, min_size=n2, channel_axis=0)
+        segments2 = felzenszwalb(img[1:4], scale=s2, sigma=sig, min_size=n, channel_axis=0)
         end = time.time()
         elapsed = end - start
         print('Time elapsed: %.2f' % elapsed, 'seconds')
@@ -429,7 +483,7 @@ for i in fw:
         
         if save_intermediates == True:
             # save new segments only
-            segments2_out = clip_out.split('.')[0] + '_new_segments.tif'
+            segments2_out = clip_out.split('.')[0] + '_new_segments_s.tif'
             with rio.open(segments2_out, 'w', **segmeta) as dst:
                 dst.write(segments2.astype(segmeta['dtype']))
         
@@ -440,6 +494,25 @@ for i in fw:
         with rio.open(clip_out_iter, 'w', **segmeta) as dst:
             dst.write(segments_iter.astype(segmeta['dtype']))
 
+        # save segments which have field observations as vectors
+        # sample raster
+        gdf = sampleRasterToGDF(clip_out_iter, gdf)
+        # extract sampled list
+        gdf['segments_iter'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
+        gdf = gdf.drop('sampled', axis=1)
+        # get segment ids where is field data
+        seg_iter_ids = gdf.segments_iter[gdf.segments_iter > 0].unique()
+        # create mask for segmented area with field data 
+        segments_iter_fobs = np.zeros(shape=segments.shape)
+        for segid in seg_iter_ids:
+            segments_iter_fobs = np.where(segments_iter == segid, segments_iter, segments_iter_fobs)
+        # save iterated segments with field data
+        segments_field_out = clip_out.split('.')[0] + '_segments_iter_w_field_obs.tif'
+        with rio.open(segments_field_out, 'w', **segmeta) as dst:
+            dst.write(segments_iter_fobs.astype(segmeta['dtype']))
+        # save segments as polygons
+        gpkg_path = segments_field_out.split('.')[0] + '.gpkg'
+        poly = raster_to_gpkg(segments_field_out, gpkg_path)
         
         # TESTING check that old and new segment do not have same id
 #        test = np.unique(segments).tolist()
