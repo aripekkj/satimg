@@ -36,13 +36,11 @@ from rasterio.features import shapes
 from shapely.geometry import shape
 
 
-
-from spatialkfold.blocks import spatial_blocks 
-
 # set whether to check for duplicates within segments
 check_duplicates = True
-use_bathymetry = True
+use_bathymetry = False
 save_intermediates = True # set whether to save intermediate segmentation results
+init_max_segment = 0 # max segment value of previous tile. If only one tile leave to zero
 
 fp = sys.argv[1]
 fp_pts = sys.argv[2]
@@ -55,8 +53,8 @@ fp_bathy = '/mnt/d/users/e1008409/MK/DNASense/FIN/bathymetry_nan.tif'
 fp_pts = '/mnt/d/users/e1008409/MK/DNASense/FIN/Finland_habitat_data_ml_2016-2023.gpkg'
 
 # Finland
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/S2_LS1_20180715_v101_3035_clip.tif'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/Finland_habitat_data_ml_5m_env_sampled.gpkg'
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/S2_LS1_20180715_v101_3035_clip.tif'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/Finland_habitat_data_init.gpkg'
 fp_bathy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland/bathymetry/depth_selkameri_s_3035_.tif'
 # Finland VHR
 fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Finland_VHR/WorldView2_2014_09_08_10_36_23_L2W_Rrs_3035.tif'
@@ -266,6 +264,56 @@ def raster_to_gpkg(
 
     return gdf
 
+def finerSegmentation(image, segments, segment_id, s, sig, n, max_val):
+    # select segment area from pixel
+    segment = np.where(segments_masked == segment_id, segments_masked, 0)
+    
+    # indices of raster cells from full image
+    idcs = np.argwhere(segment[0] > 0) 
+    x_min, y_min = idcs.min(axis=0)
+    x_max, y_max = idcs.max(axis=0)
+    # select segment area 
+    single_segment = segment[:,x_min:x_max+1, y_min:y_max+1]
+    single_segment = np.where(single_segment == segment_id, single_segment, 0)
+    #plt.imshow(single_segment[0])
+    
+    # mask for segment area
+    s_idcs = np.argwhere(single_segment[0].reshape(-1) > 0)
+    # select segment area from image
+    img_segm = image[:,x_min:x_max+1, y_min:y_max+1]
+    # mask
+    img_segm = np.where(single_segment == segment_id, img_segm, np.nan)
+    #plt.imshow(img_segm[1])
+    
+    # finer segmentation
+    s2 = s/2
+    new_segments = felzenszwalb(img_segm[:,:,:], scale=s2, sigma=sig, min_size=n, channel_axis=0)
+    # expand dims
+    new_segments = np.expand_dims(new_segments, axis=0)
+    
+    # keep same segment if all nan
+    if np.all(new_segments == 0):
+        new_segments = single_segment
+    else:
+        # update to unique values
+        new_segments = np.where(new_segments > 0, new_segments + max_val, new_segments)
+      
+    #plt.imshow(new_segments[0])
+    
+    # get segment indices on 1d array
+    segment_1d = segment.reshape(-1)
+    idcs_1d = np.argwhere(segment_1d > 0)
+    # reshape original segment layer
+    segments_1d = segments.reshape(-1)
+    # reshape finer segmentation
+    new_segm_1d = new_segments.reshape(-1)
+    new_segm = new_segm_1d[s_idcs] # mask segment area from new segment
+    # update new segment on segment raster
+    segments_1d[idcs_1d[:,0]] = new_segm[:,0]
+    # back to 2D array
+    segments2d = segments_1d.reshape(1,segments.shape[1], segments.shape[2])    
+
+    return segments2d
 
 
 basedir = os.path.dirname(fp)
@@ -282,7 +330,7 @@ with rio.open(fp) as src:
 max_dim = max(xds.shape)
 # set tile size
 tilesize = math.ceil(max_dim/2)
-tilesize = 10000
+tilesize = 12000
 # compute bounds for tiles
 fw = np.arange(0, int(profile['width'] / tilesize)+1, 1) # how many full tiles fits in width
 fh = np.arange(0, int(profile['height'] / tilesize)+1, 1) # how many full tiles fits in height
@@ -387,7 +435,11 @@ for i in fw:
 #        segments = felzenszwalb(pca, scale=s, sigma=sig, min_size=n, channel_axis=0) # test if segmenting PCA makes different result - not significantly
         end = time.time()
         elapsed = end - start
-        print('Time elapsed: %.2f' % elapsed, 'seconds')
+        print('1st segmentation, Time elapsed: %.2f' % elapsed, 'seconds')
+        
+        # add initial value to segments to keep unique values between tiles
+        segments = segments + init_max_segment
+        
         # mask nodata areas
         nodatamask = np.where((xds_c[2].values == xds.rio.nodata) | (np.isnan(xds_c[2].values)), True, False)
         segments = np.where(nodatamask == True, 0, segments)
@@ -397,9 +449,25 @@ for i in fw:
             continue
         # expand dims
         segments = np.expand_dims(segments, axis=0)
+        
+# =============================================================================
+#         # ------ Updating unique segment values -------- #
+#         if max_segment != 0:
+#             # get ids
+#             seg_ids = np.unique(segments).tolist()
+#             seg_ids.remove(0) # drop 0 as it is nodata
+#             # update segment IDs so they are unique to previous tile segmentation
+#             tile_id_start = np.max(segments) + 1 # get maximum value from 1st segmentation and add 1
+#             tile_id_end = tile_id_start + len(np.unique(segments)) # length of new ids as end
+#             tile_ids = np.arange(tile_id_start, tile_id_end).tolist() # new id values
+#             for sid in seg_ids:
+#                 segments = np.where(segments == sid, tile_ids[seg_ids.index(sid)], segments) # update new segment ids
+#         
+# =============================================================================
+        
         # define profile
         segmeta = profile.copy()
-        segmeta.update(dtype='uint32',
+        segmeta.update(dtype='int32',
                        width=segments.shape[2],
                        height=segments.shape[1],
                        nodata=0,
@@ -409,10 +477,11 @@ for i in fw:
         segdir = os.path.join(basedir, 'segmentation')
         if os.path.isdir(segdir) == False:
             os.mkdir(segdir)
-        clip_out = os.path.join(segdir, prefix + str(tilesize) + '_n' + str(n) + '_s' + str(s).split('.')[1] + str(i) + '_' + str(j) + '.tif') 
+        segments_out = os.path.join(segdir, prefix + str(tilesize) + '_n' + str(n) + '_s' + str(s).split('.')[1] + str(i) + '_' + str(j) + '.tif') 
+        print('Saving segments')
 
         # save
-        with rio.open(clip_out, 'w', **segmeta) as dst:
+        with rio.open(segments_out, 'w', **segmeta) as dst:
             dst.write(segments.astype(segmeta['dtype']))
         
         if use_bathymetry == True:
@@ -425,15 +494,14 @@ for i in fw:
             bathy_c, bathy_c_path = maskAndSave(bathy, os.path.dirname(fp_bathy), i, j) # save tile
 
         # =============================================================================        
-        # finer scale segmentation where is field data     
-        #TODO consider adding new segmentation iteration if different bottom classes within segment
+        
         # clip pts to extent
         gdf = clipGDF(fp_pts_encoded, clip_bounds)
         # check that points exists within clip bounds
         if len(gdf) == 0:
             continue
         # sample raster
-        gdf = sampleRasterToGDF(clip_out, gdf)
+        gdf = sampleRasterToGDF(segments_out, gdf)
         # extract sampled list
         gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
         gdf = gdf.drop('sampled', axis=1)
@@ -451,69 +519,101 @@ for i in fw:
             gdf['bathymetry'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
             gdf = gdf.drop('sampled', axis=1)
         
+        # finer scale segmentation where is field data     
+        print('Segmentation iteration')
         # get segment ids with multiple points
+        segments_w_pts = np.unique(gdf.segments)
         segments_ids = gdf.segments[gdf.duplicated('segments', keep=False)]
+        
+    
         # create mask for segmented area with field data 
         segments_fd = np.zeros(shape=segments.shape)
-        for segid in segments_ids:
+        for segid in segments_w_pts:
             segments_fd = np.where(segments == segid, 1, segments_fd)
         # select area from image
-        img = np.where(segments_fd == 1, xds_c[0:xds_c.band.shape[0]].values, np.nan)
+#        img = np.where(segments_fd == 1, xds_c[0:xds_c.band.shape[0]].values, np.nan)
         # mask
         #img = np.where(nodatamask == True, np.nan, img)
         # image segmentation parameters 
-        n2 = 3
-        s2 = s/2
-        start = time.time()
-        segments2 = felzenszwalb(img[1:4], scale=s2, sigma=sig, min_size=n, channel_axis=0)
-        end = time.time()
-        elapsed = end - start
-        print('Time elapsed: %.2f' % elapsed, 'seconds')
+        
+#        s2 = s/2
+#        start = time.time()
+#        segments2 = felzenszwalb(img[1:4], scale=s2, sigma=sig, min_size=n, channel_axis=0)
+#        end = time.time()
+#        elapsed = end - start
+#        print('Time elapsed: %.2f' % elapsed, 'seconds')
         # mask segments where field points don't overlap
-        segments2 = np.where(segments_fd == 1, segments2, 0)
-        # get ids
-        old_ids = np.unique(segments2).tolist()
-        old_ids.remove(0) # drop 0 as it is nodata
-        # update segment IDs so they are unique to first segmentation
-        new_id_start = np.max(segments) + 1 # get maxmimum value from 1st segmentation and add 1
-        new_id_end = new_id_start + len(np.unique(segments2)) # length of new ids as end
-        new_ids = np.arange(new_id_start, new_id_end).tolist() # new id values
-        for o in old_ids:
-            segments2 = np.where(segments2 == o, new_ids[old_ids.index(o)], segments2) # update new segment ids
+#        segments2 = np.where(segments_fd == 1, segments2, 0)
         
-        if save_intermediates == True:
-            # save new segments only
-            segments2_out = clip_out.split('.')[0] + '_new_segments_s.tif'
-            with rio.open(segments2_out, 'w', **segmeta) as dst:
-                dst.write(segments2.astype(segmeta['dtype']))
-        
-        # combine new segmentation to previous
-        segments_iter = np.where(segments_fd == 1, segments2, segments)
-        # save
-        clip_out_iter = clip_out.split('.')[0] + '_iter.tif'
-        with rio.open(clip_out_iter, 'w', **segmeta) as dst:
-            dst.write(segments_iter.astype(segmeta['dtype']))
+        # mask segments without point data
+#        segments_masked = np.where(np.isin(segments, segments_w_pts), segments, 0)
+        segments_masked = np.where(segments_fd == 1, segments, 0)
 
-        # save segments which have field observations as vectors
-        # sample raster
-        gdf = sampleRasterToGDF(clip_out_iter, gdf)
-        # extract sampled list
-        gdf['segments_iter'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
-        gdf = gdf.drop('sampled', axis=1)
-        # get segment ids where is field data
-        seg_iter_ids = gdf.segments_iter[gdf.segments_iter > 0].unique()
-        # create mask for segmented area with field data 
-        segments_iter_fobs = np.zeros(shape=segments.shape)
-        for segid in seg_iter_ids:
-            segments_iter_fobs = np.where(segments_iter == segid, segments_iter, segments_iter_fobs)
-        # save iterated segments with field data
-        segments_field_out = clip_out.split('.')[0] + '_segments_iter_w_field_obs.tif'
-        with rio.open(segments_field_out, 'w', **segmeta) as dst:
-            dst.write(segments_iter_fobs.astype(segmeta['dtype']))
-        # save segments as polygons
-        gpkg_path = segments_field_out.split('.')[0] + '.gpkg'
-        poly = raster_to_gpkg(segments_field_out, gpkg_path)
+        # finer segmentation per segment        
+        if len(segments_ids) > 0:
+            # TODO: parallelize
+            seg_ids = np.unique(segments_ids).tolist()
+            if 0 in seg_ids:
+                seg_ids.remove(0)
+            max_segment = np.max(segments_w_pts) # maximum segment value for new unique ids
+            for seg_id in seg_ids:
+                print('Updating segment', str(seg_id))
+                segments_iter = finerSegmentation(xds_c[1:4].values, segments_masked, seg_id, s, sig, n, max_segment)
+                # update maximum segment value
+                max_segment = np.max(segments_iter)
+            # update segment id's
+    # =============================================================================
+    #         # ------ Updating unique segment values -------- #
+    #         print('updating segment ids')
+    #         # get ids
+    #         old_ids = np.unique(segments2).tolist()
+    #         old_ids.remove(0) # drop 0 as it is nodata
+    #         # update segment IDs so they are unique to first segmentation
+    #         new_id_start = np.max(segments) + 1 # get maximum value from 1st segmentation and add 1
+    #         new_id_end = new_id_start + len(np.unique(segments2)) # length of new ids as end
+    #         new_ids = np.arange(new_id_start, new_id_end).tolist() # new id values
+    #         for o in old_ids:
+    #             segments2 = np.where(segments2 == o, new_ids[old_ids.index(o)], segments2) # update new segment ids
+    #         
+    #         if save_intermediates == True:
+    #             # save new segments only
+    #             segments2_out = segments_out.split('.')[0] + '_new_segments_s2.tif'
+    #             with rio.open(segments2_out, 'w', **segmeta) as dst:
+    #                 dst.write(segments2.astype(segmeta['dtype']))
+    #         
+    #         # combine new segmentation to previous
+    #         segments_iter = np.where(segments_fd == 1, segments2, segments)
+    #         # save
+    # =============================================================================
+            segments_out_iter = segments_out.split('.')[0] + '_iter.tif'
+            with rio.open(segments_out_iter, 'w', **segmeta) as dst:
+                dst.write(segments_iter.astype(segmeta['dtype']))
+
+            # save segments which have field observations as vectors
+            print('Saving segment polygons')
+            # sample raster
+            gdf = sampleRasterToGDF(segments_out_iter, gdf)
+            # extract sampled list
+            gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
+            gdf = gdf.drop('sampled', axis=1)
+            # get segment ids where is field data
+            seg_iter_ids = gdf.segments[gdf.segments > 0].unique()
+    
+            # save segments as polygons
+            gpkg_path = segments_out_iter.split('.')[0] + '.gpkg'
+            poly = raster_to_gpkg(segments_out_iter, gpkg_path)
         
+        else: # save 1st round segments if no duplicate points in segments. Keep similar filename for simplicity
+            segments_out_iter = segments_out.split('.')[0] + '_iter.tif'
+            with rio.open(segments_out_iter, 'w', **segmeta) as dst:
+                dst.write(segments_masked.astype(segmeta['dtype']))
+
+            # get segment ids where is field data
+            seg_iter_ids = gdf.segments[gdf.segments > 0].unique()
+    
+            # save segments as polygons
+            gpkg_path = segments_out_iter.split('.')[0] + '.gpkg'
+            poly = raster_to_gpkg(segments_out_iter, gpkg_path)
         # TESTING check that old and new segment do not have same id
 #        test = np.unique(segments).tolist()
 #        to_test = np.unique(segments2).tolist()
@@ -522,17 +622,17 @@ for i in fw:
 #        same_segments = np.zeros(shape=segments.shape)
 #        for sameid in same_ids:
 #            same_segments = np.where(segments_iter == sameid, segments_iter, same_segments)
-#        same_out = clip_out_iter.split('.tif')[0] + '_same_ids.tif'
+#        same_out = segments_out_iter.split('.tif')[0] + '_same_ids.tif'
 #        with rio.open(same_out, 'w', **segmeta) as dst:
 #            dst.write(same_segments.astype(segmeta['dtype']))
         
         
         # sample new segment ids to gdf       
-        gdf = sampleRasterToGDF(clip_out_iter, gdf)
+#        gdf = sampleRasterToGDF(segments_out_iter, gdf)
         # extract sampled list
-        gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
-        gdf = gdf.drop('sampled', axis=1)
-        
+#        gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
+#        gdf = gdf.drop('sampled', axis=1)
+        print('Checking duplicates')
         if check_duplicates == True:
             # handle possible duplicates, ie. points that are within same segment
             # pts that have exact same sampled values
@@ -605,10 +705,13 @@ for i in fw:
 
         # concat gdf
         gdf_out = pd.concat([gdf_out, gdf])
+        
+
+print('Max segment', np.max(segments_iter))
 # drop duplicate column as it is not needed
 gdf_out = gdf_out.drop(['duplicate', 'duplicate_id'], axis=1)        
 # delete first segmentation file as it is temporary layer
-os.remove(clip_out)
+os.remove(segments_out)
 # reset index
 result = result.reset_index(drop=True)
 
