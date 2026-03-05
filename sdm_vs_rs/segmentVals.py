@@ -524,33 +524,31 @@ for i in fw:
         # get segment ids with multiple points
         segments_w_pts = np.unique(gdf.segments)
         segments_ids = gdf.segments[gdf.duplicated('segments', keep=False)]
-        
-    
+#        print('Segments with points', len(segments_w_pts))
+#        print('Segments with several points', len(segments_ids))
+
         # create mask for segmented area with field data 
         segments_fd = np.zeros(shape=segments.shape)
         for segid in segments_w_pts:
             segments_fd = np.where(segments == segid, 1, segments_fd)
-        # select area from image
-#        img = np.where(segments_fd == 1, xds_c[0:xds_c.band.shape[0]].values, np.nan)
         # mask
-        #img = np.where(nodatamask == True, np.nan, img)
-        # image segmentation parameters 
-        
-#        s2 = s/2
-#        start = time.time()
-#        segments2 = felzenszwalb(img[1:4], scale=s2, sigma=sig, min_size=n, channel_axis=0)
-#        end = time.time()
-#        elapsed = end - start
-#        print('Time elapsed: %.2f' % elapsed, 'seconds')
-        # mask segments where field points don't overlap
-#        segments2 = np.where(segments_fd == 1, segments2, 0)
-        
-        # mask segments without point data
-#        segments_masked = np.where(np.isin(segments, segments_w_pts), segments, 0)
         segments_masked = np.where(segments_fd == 1, segments, 0)
 
-        # finer segmentation per segment        
-        if len(segments_ids) > 0:
+        # check that all are not zero
+        if not np.any(segments_ids): 
+        # save 1st round segments if no duplicate points in segments. Keep similar filename for simplicity
+            segments_out_iter = segments_out.split('.')[0] + '_iter.tif'
+            segments_iter = segments_masked
+            with rio.open(segments_out_iter, 'w', **segmeta) as dst:
+                dst.write(segments_masked.astype(segmeta['dtype']))
+
+            # get segment ids where is field data
+            seg_iter_ids = gdf.segments[gdf.segments > 0].unique()
+    
+            # save segments as polygons
+            gpkg_path = segments_out_iter.split('.')[0] + '.gpkg'
+            poly = raster_to_gpkg(segments_out_iter, gpkg_path)    
+        else: # finer segmentation per segment
             # TODO: parallelize
             seg_ids = np.unique(segments_ids).tolist()
             if 0 in seg_ids:
@@ -561,30 +559,8 @@ for i in fw:
                 segments_iter = finerSegmentation(xds_c[1:4].values, segments_masked, seg_id, s, sig, n, max_segment)
                 # update maximum segment value
                 max_segment = np.max(segments_iter)
-            # update segment id's
-    # =============================================================================
-    #         # ------ Updating unique segment values -------- #
-    #         print('updating segment ids')
-    #         # get ids
-    #         old_ids = np.unique(segments2).tolist()
-    #         old_ids.remove(0) # drop 0 as it is nodata
-    #         # update segment IDs so they are unique to first segmentation
-    #         new_id_start = np.max(segments) + 1 # get maximum value from 1st segmentation and add 1
-    #         new_id_end = new_id_start + len(np.unique(segments2)) # length of new ids as end
-    #         new_ids = np.arange(new_id_start, new_id_end).tolist() # new id values
-    #         for o in old_ids:
-    #             segments2 = np.where(segments2 == o, new_ids[old_ids.index(o)], segments2) # update new segment ids
-    #         
-    #         if save_intermediates == True:
-    #             # save new segments only
-    #             segments2_out = segments_out.split('.')[0] + '_new_segments_s2.tif'
-    #             with rio.open(segments2_out, 'w', **segmeta) as dst:
-    #                 dst.write(segments2.astype(segmeta['dtype']))
-    #         
-    #         # combine new segmentation to previous
-    #         segments_iter = np.where(segments_fd == 1, segments2, segments)
-    #         # save
-    # =============================================================================
+            
+            # Save segments with point data as raster
             segments_out_iter = segments_out.split('.')[0] + '_iter.tif'
             with rio.open(segments_out_iter, 'w', **segmeta) as dst:
                 dst.write(segments_iter.astype(segmeta['dtype']))
@@ -603,17 +579,6 @@ for i in fw:
             gpkg_path = segments_out_iter.split('.')[0] + '.gpkg'
             poly = raster_to_gpkg(segments_out_iter, gpkg_path)
         
-        else: # save 1st round segments if no duplicate points in segments. Keep similar filename for simplicity
-            segments_out_iter = segments_out.split('.')[0] + '_iter.tif'
-            with rio.open(segments_out_iter, 'w', **segmeta) as dst:
-                dst.write(segments_masked.astype(segmeta['dtype']))
-
-            # get segment ids where is field data
-            seg_iter_ids = gdf.segments[gdf.segments > 0].unique()
-    
-            # save segments as polygons
-            gpkg_path = segments_out_iter.split('.')[0] + '.gpkg'
-            poly = raster_to_gpkg(segments_out_iter, gpkg_path)
         # TESTING check that old and new segment do not have same id
 #        test = np.unique(segments).tolist()
 #        to_test = np.unique(segments2).tolist()
@@ -627,11 +592,7 @@ for i in fw:
 #            dst.write(same_segments.astype(segmeta['dtype']))
         
         
-        # sample new segment ids to gdf       
-#        gdf = sampleRasterToGDF(segments_out_iter, gdf)
-        # extract sampled list
-#        gdf['segments'] = gpd.GeoDataFrame(gdf.sampled.tolist(), index=gdf.index)
-#        gdf = gdf.drop('sampled', axis=1)
+
         print('Checking duplicates')
         if check_duplicates == True:
             # handle possible duplicates, ie. points that are within same segment
