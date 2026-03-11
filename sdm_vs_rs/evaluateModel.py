@@ -40,10 +40,14 @@ import gc
 # filepath
 fp = sys.argv[1]
 fp_pts = sys.argv[2]
+fp_poly = sys.argv[3]
 
 ########################################################
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece/Greece_habitat_data_ml_filtered.gpkg'
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Denmark_edit'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Denmark_edit/Kattegat_e_habitat_data_init_filtered_merge_buf100_folds.gpkg'
+fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Denmark_edit/segmentation/LS2e_segments_iter_merge_buf100_folds.gpkg'
+
+
 # model dir
 modeldir = os.path.join(fp, 'model')
 if os.path.isdir(modeldir) == False:
@@ -51,8 +55,7 @@ if os.path.isdir(modeldir) == False:
 prefix = os.path.basename(fp_pts).split('_')[0]
 # read data
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
-# copy depth column with different name for prediction
-#gdf['bathymetry'] = gdf.depth
+poly = gpd.read_file(fp_poly, engine='pyogrio')
 
 # get pca variance
 fp_pca = os.path.join(fp, 'pca', '*pca_var.csv')
@@ -73,9 +76,12 @@ for file in glob.glob(os.path.join(fp, 'segmentation', 'segvals', '*segvals.csv'
     df1 = pd.read_csv(file, sep=';')
     df = pd.concat([df, df1])
 del(df1)
+# save merged dataframe
+df_merged = os.path.join('segmentation', 'segvals', 'segvals_merged.csv')
+df.to_csv(df_merged, sep=';')
+
 # set train cols
-# set train cols
-colset = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8'] + pcacols + ['bathymetry']
+colset = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8'] #+ pcacols + ['bathymetry']
 traincols = df.columns[1:-3].intersection(colset) #get the same columns as on list
 
 # standardize data
@@ -101,8 +107,6 @@ models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balance
                   }
           }
 
-# output columns 
-gdf['test_fold'] = None
 # create columns for all class probabilities
 proba_cols = []
 for m in models:
@@ -114,28 +118,22 @@ for p in proba_cols:
     gdf[p] = None
 # df to store permutation importance
 df_perm = pd.DataFrame(index=np.arange(0,100))
-# make stratified KFolds for points
-folds = dict()
-skf = StratifiedKFold(n_splits=10, random_state=42, shuffle=True)
-# use field obs points
-for i, (train, test) in enumerate(skf.split(gdf.point_id, gdf.int_class)):
-    # save train, test point_id's to dictionary
-    k = 'fold_' + str(i+1)
-    tr_pts = gdf['point_id'].iloc[train].tolist() # get point_id's by index
-    te_pts = gdf['point_id'].iloc[test].tolist()
-    folds[k] = (tr_pts, te_pts)
-    #double check that sets are separate (this step can be removed later)
-    for t in train:
-    #    print(t)
-        if t in set(test):
-            print('Value found in test')
-
+# folds
+n_folds = [c for c in gdf.columns if '_train' in c] # get number of folds from train fold columns
+folds = ['fold_' + str(i) for i in np.arange(1,len(n_folds)+1,1)]
 # evaluate
 for f in folds:
     print('Evaluating:', f)
-    # select pixel values by point_id
-    df_train = df[df.point_id.isin(folds[f][0])]
-    df_test = df[df.point_id.isin(folds[f][1])]
+    
+    # segment ids for train ,test in fold
+    f_train = f + '_train'
+    f_test = f + '_test'
+    train_ids = poly['value'][poly[f_train] == True].values
+    test_ids = poly['value'][poly[f_test] == True].values
+
+    # select by segment id
+    df_train = df[df.segment_id.isin(train_ids)]
+    df_test = df[df.segment_id.isin(test_ids)]
     
     # select columns
     X_train = df_train[traincols].to_numpy()
@@ -143,9 +141,10 @@ for f in folds:
     X_test = df_test[traincols].to_numpy()
     y_test = le.transform(df_test['int_class'])
     # select groups (ie. segments)
-    groups = df['point_id'][df.point_id.isin(folds[f][0])].to_numpy()
+    groups = df['segment_id'][df.segment_id.isin(train_ids)].to_numpy()
     print('Classes in train set', np.unique(y_train ,return_counts=True))
     print('Classes in test set', np.unique(y_test ,return_counts=True))
+    
     # sample weights
     sample_weights = compute_sample_weight('balanced', y_train)
     # StratifiedGroupKFold for hyperparameter tuning
@@ -160,8 +159,8 @@ for f in folds:
     #     print('Classes in test set', np.unique(y_train[test_index] ,return_counts=True))
     # hyperparameter optimization
     for m in models:
-#        if m != 'RF':
-#            continue
+        #if m != 'RF': # just to select one model for testing
+        #    continue
         # make pipeline 
         pipeline = Pipeline([('scaler', StandardScaler()),
                              ('classifier', models[m]['model'])])
@@ -173,8 +172,11 @@ for f in folds:
                     param_dict[pp] = models[m]['params'].get(p)
 
         # set estimator params
-        search = RandomizedSearchCV(pipeline, param_distributions=param_dict, scoring='balanced_accuracy', cv=sgkf, return_train_score=True, n_iter=10, n_jobs=-1)
-        result = search.fit(X_train, y_train, groups=groups)
+        search = RandomizedSearchCV(pipeline, param_distributions=param_dict, scoring='balanced_accuracy', cv=sgkf, return_train_score=True, n_iter=10, n_jobs=-1, refit=True)
+        if m == 'XGB':
+            result = search.fit(X_train, y_train, classifier__sample_weight=sample_weights, groups=groups)
+        else:
+            result = search.fit(X_train, y_train, groups=groups)
 #        gcv = GridSearchCV(models[m]['model'], param_grid=models[m]['params'], scoring='accuracy', cv=sgkf, return_train_score=True, n_jobs=6)
         
         # summarize result
@@ -191,7 +193,6 @@ for f in folds:
 
         #clf = models[m]['model'].set_params(**models[m]['best_params']) # set model parameters according to GridSearchCV
         clf = result.best_estimator_ # get best estimator from hyperparameter search. NOTE: result from RandomizedSearchCV returns pipeline, which includes scaling and the best estimator
-        clf.fit(X_train, y_train) # fit data
         
         print(m, f, clf.score(X_test, y_test))
     
@@ -205,10 +206,11 @@ for f in folds:
         # save confusion matrix of each fold 
         models[m].setdefault('test_cm', []).append(cm)
         # predict proba to gdf
-        gdf_test = gdf[gdf.point_id.isin(folds[f][1])] # get test points
+        gdf_test = gdf[gdf.segments.isin(test_ids)]   
+#        gdf_test = gdf[gdf.point_id.isin(folds[f][1])] # get test points
         gdf_test = gdf_test.dropna(subset=traincols)
         
-        gdf_test_arr = gdf_test[traincols].to_numpy() # scale for model
+        gdf_test_arr = gdf_test[traincols].to_numpy() # test points to array
         pred_proba = clf.predict_proba(gdf_test_arr) #predict
     
         # select columns
@@ -218,7 +220,7 @@ for f in folds:
             print(n)
             gdf.loc[gdf_test.index, probacols[n]] = pred_proba[:,n]
         
-        # predicted value to gdf
+        # test fold name to gdf
         gdf.loc[gdf_test.index, 'test_fold'] = f
         
         #permutation importance
@@ -366,16 +368,17 @@ for m in models:
                 param_dict[pp] = models[m]['params'].get(p)
 
     # set estimator params
-    search = RandomizedSearchCV(pipeline, param_distributions=param_dict, scoring='balanced_accuracy', cv=sgkf, return_train_score=True, n_iter=10, n_jobs=-1)
-    result = search.fit(X, y, groups=groups)
+    search = RandomizedSearchCV(pipeline, param_distributions=param_dict, scoring='balanced_accuracy', cv=sgkf, return_train_score=True, n_iter=10, n_jobs=-1, refit=True)
+    if m == 'XGB':
+        result = search.fit(X, y, classifier__sample_weight=sample_weights, groups=groups)
+    else:
+        result = search.fit(X, y, groups=groups)
+    #result = search.fit(X, y, groups=groups)
     clf = result.best_estimator_
     best_params = result.best_params_
     best_params_out = os.path.join(modeldir, m + '_best_params.json')
     with open(best_params_out, 'w') as f_out:
         json.dump(best_params, f_out, indent=4)
-    
-    # fit all data
-    clf.fit(X, y)
 
     clf_out = os.path.join(modeldir, m + '_' + prefix + '.sav') # filename
     pickle.dump(clf, open(clf_out, 'wb'))
