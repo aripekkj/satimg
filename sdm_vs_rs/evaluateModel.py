@@ -130,7 +130,13 @@ for f in folds:
     f_test = f + '_test'
     train_ids = poly['value'][poly[f_train] == True].values
     test_ids = poly['value'][poly[f_test] == True].values
-
+    
+    # test that no same values in train and test
+    test_similarity = set(train_ids).intersection(set(test_ids))
+    if len(test_similarity) != 0: 
+        print('Found same values in train and test sets')
+        break
+    
     # select by segment id
     df_train = df[df.segment_id.isin(train_ids)]
     df_test = df[df.segment_id.isin(test_ids)]
@@ -147,6 +153,7 @@ for f in folds:
     
     # sample weights
     sample_weights = compute_sample_weight('balanced', y_train)
+    print(sample_weights)
     # StratifiedGroupKFold for hyperparameter tuning
     sgkf = StratifiedGroupKFold(n_splits=5, shuffle=False)
     # for i, (train_index, test_index) in enumerate(sgkf.split(X_train, y_train, groups)):
