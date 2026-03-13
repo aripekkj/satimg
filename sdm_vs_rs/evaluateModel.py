@@ -43,9 +43,9 @@ fp_pts = sys.argv[2]
 fp_poly = sys.argv[3]
 
 ########################################################
-fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Denmark_edit'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Denmark_edit/Kattegat_e_habitat_data_init_filtered_merge_buf100_folds.gpkg'
-fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Denmark_edit/segmentation/LS2e_segments_iter_merge_buf100_folds.gpkg'
+fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/Finland_habitat_data_init_LS1_20180715_folds.gpkg'
+fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/segmentation/LS1_2018071512000_n5_s10_0_iter_folds.gpkg'
 
 
 # model dir
@@ -81,8 +81,9 @@ df_merged = os.path.join('segmentation', 'segvals', 'segvals_merged.csv')
 df.to_csv(df_merged, sep=';')
 
 # set train cols
-colset = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8'] #+ pcacols + ['bathymetry']
+colset = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8'] + pcacols + ['bathymetry']
 traincols = df.columns[1:-3].intersection(colset) #get the same columns as on list
+print(traincols)
 
 # standardize data
 le = LabelEncoder() 
@@ -124,7 +125,7 @@ folds = ['fold_' + str(i) for i in np.arange(1,len(n_folds)+1,1)]
 # evaluate
 for f in folds:
     print('Evaluating:', f)
-    
+
     # segment ids for train ,test in fold
     f_train = f + '_train'
     f_test = f + '_test'
@@ -214,10 +215,13 @@ for f in folds:
         models[m].setdefault('test_cm', []).append(cm)
         # predict proba to gdf
         gdf_test = gdf[gdf.segments.isin(test_ids)]   
-#        gdf_test = gdf[gdf.point_id.isin(folds[f][1])] # get test points
+        # dropna
         gdf_test = gdf_test.dropna(subset=traincols)
-        
-        gdf_test_arr = gdf_test[traincols].to_numpy() # test points to array
+        # replace 'bathymetry' column with 'depth' to use actual measured depth for points
+        pointcols = colset.copy()
+        pointcols.remove('bathymetry')
+        pointcols.append('depth')
+        gdf_test_arr = gdf_test[pointcols].to_numpy() # test points to array
         pred_proba = clf.predict_proba(gdf_test_arr) #predict
     
         # select columns
@@ -254,7 +258,7 @@ models_dict_out = os.path.join(modeldir, 'models_cv_result.npy')
 np.save(models_dict_out, models)
 # save prediction on sampled points
 gdf[proba_cols] = gdf[proba_cols].astype(float)
-gdf_out = os.path.join(os.path.dirname(fp_pts), prefix + '_preds.gpkg')
+gdf_out = os.path.join(modeldir, prefix + '_preds.gpkg')
 gdf.to_file(gdf_out, engine='pyogrio')
 # save permutation importances dataframe
 perm_df_out = os.path.join(modeldir, 'permutation_importances.csv')
