@@ -71,7 +71,7 @@ def plot_confusion_with_metrics(cm, model, output_dir, labels=None, cmap="Blues"
     # --- Plot confusion matrix ---
     fig, ax = plt.subplots(2, 1, figsize=(11, 14), gridspec_kw={"height_ratios": [3, 1]})
 
-    sns.heatmap(
+    hm = sns.heatmap(
         cm,
         annot=annot,
         fmt="",
@@ -84,7 +84,10 @@ def plot_confusion_with_metrics(cm, model, output_dir, labels=None, cmap="Blues"
         ax=ax[0],
         annot_kws={"size": 35 / np.sqrt(len(cm))}
     )
-
+    
+    hm.set_xticklabels(hm.get_xmajorticklabels(), fontsize = 20)
+    hm.set_yticklabels(hm.get_xmajorticklabels(), fontsize = 20)
+    
     ax[0].set_title(model + " Confusion Matrix with 10-Fold Average Row & Column Percentages", fontsize=15)
     #ax[0].set_xlabel("Predicted", fontsize=13)
     #ax[0].set_ylabel("Actual", fontsize=13)
