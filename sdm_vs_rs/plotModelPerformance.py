@@ -23,6 +23,94 @@ from sklearn import metrics
 import seaborn as sns
 import argparse
 
+def plot_confusion_with_metrics(cm, model, output_dir, labels=None, cmap="Blues"):
+    """
+    Plot confusion matrix with:
+        - raw counts
+        - row-wise percentages
+        - column-wise percentages
+        - metrics table (precision, recall, F1)
+    """
+    
+    n = cm.shape[0]
+
+    if labels is None:
+        labels = [f"Class {i}" for i in range(n)]
+
+    # --- Compute row + column percentages ---
+    row_sums = cm.sum(axis=1, keepdims=True)
+    col_sums = cm.sum(axis=0, keepdims=True)
+
+    row_pct = cm / row_sums
+    col_pct = cm / col_sums
+
+    # --- Confusion matrix annotation ---
+    annot = np.empty_like(cm, dtype="object")
+    for i in range(n):
+        for j in range(n):
+            annot[i, j] = (
+                f"{int(cm[i,j]):,}\n"
+                f"R:{row_pct[i,j]*100:4.1f}% \n C:{col_pct[i,j]*100:4.1f}%"
+            )
+
+    # --- Metrics ---
+    tp = np.diag(cm)
+    fp = cm.sum(axis=0) - tp
+    fn = cm.sum(axis=1) - tp
+
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1 = 2 * precision * recall / (precision + recall)
+
+    metrics_df = pd.DataFrame({
+        "Precision": precision,
+        "Recall": recall,
+        "F1 Score": f1
+    }, index=labels).round(4)
+
+    # --- Plot confusion matrix ---
+    fig, ax = plt.subplots(2, 1, figsize=(11, 14), gridspec_kw={"height_ratios": [3, 1]})
+
+    sns.heatmap(
+        cm,
+        annot=annot,
+        fmt="",
+        cmap=cmap,
+        xticklabels=labels,
+        yticklabels=labels,
+        cbar=False,
+        linewidths=0.5,
+        linecolor="gray",
+        ax=ax[0],
+        annot_kws={"size": 35 / np.sqrt(len(cm))}
+    )
+
+    ax[0].set_title(model + " Confusion Matrix with 10-Fold Average Row & Column Percentages", fontsize=15)
+    #ax[0].set_xlabel("Predicted", fontsize=13)
+    #ax[0].set_ylabel("Actual", fontsize=13)
+
+    # --- Table below the heatmap ---
+    ax[1].axis("off")
+    table = ax[1].table(
+        cellText=metrics_df.values,
+        rowLabels=metrics_df.index,
+        colLabels=metrics_df.columns,
+        cellLoc='center',
+        loc='center'
+    )
+    table.scale(1, 2)
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+
+    plt.tight_layout()
+    
+    #output filename
+    plot_out = os.path.join(output_dir, model + '_cm_metrics_plot.png')
+    plt.savefig(plot_out, dpi=300)
+    #plt.show()
+
+    return row_pct, col_pct, metrics_df
+
 CLI = argparse.ArgumentParser()
 CLI.add_argument(
     'directory',
@@ -43,10 +131,8 @@ fp_pts = args.fp_pts
 fp_npy = args.cv_result
 
 # fp
-#fp = '/mnt/d/users/e1008409/MK/DNASense/FIN/2023/model_10fold'
-#fp = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece'
-#fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece/Greece_habitat_data_ml_filtered.gpkg'
-#fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/Greece/model/models_cv_result.npy'
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/Finland_habitat_data_init_encoded_folds.gpkg'
+fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/model/models_cv_result.npy'
 
 modeldir = os.path.dirname(fp_npy)
 # load
@@ -89,7 +175,6 @@ plt.suptitle(title_str)
 plt.tight_layout()
 plot_out = os.path.join(modeldir, 'models_CV_accuracy.png')
 plt.savefig(plot_out, dpi=300, format='PNG')
-
 # ---------------------------------------------------- #
 
 # load
@@ -139,27 +224,28 @@ for i, (train, test) in enumerate(skf.split(gdf.point_id, gdf.int_class)):
 classes = np.unique(gdf.hab_class_ml)
 pred_df = pd.DataFrame()
 cms = []
+cm_list = [] # list to store fold cm matrix
 acc_df = pd.DataFrame(index=list(folds.keys()))
 
-# evaluation folds
-for f in folds:
-    # select pixel values by point_id
-    df_train = df[df.point_id.isin(folds[f][0])]
-    df_test = df[df.point_id.isin(folds[f][1])]    
-    # select columns
-    X_train = StandardScaler().fit_transform(df_train[traincols].to_numpy())
-    y_train = le.transform(df_train['int_class'])
-    X_test = StandardScaler().fit_transform(df_test[traincols].to_numpy())
-    y_test = le.transform(df_test['int_class'])
-    # try model performance on test
-    predf = pd.DataFrame()
-    predf['truth'] = y_test
-    predf['fold'] = f
-
-    for m in models:
-#        if m != 'RF':
-#            continue        
-        # get tuned hyperparameters
+for m in models:
+    #if m != 'RF':
+    #    continue 
+    # evaluation folds
+    for f in folds:
+        # select pixel values by point_id
+        df_train = df[df.point_id.isin(folds[f][0])]
+        df_test = df[df.point_id.isin(folds[f][1])]    
+        # select columns
+        X_train = StandardScaler().fit_transform(df_train[traincols].to_numpy())
+        y_train = le.transform(df_train['int_class'])
+        X_test = StandardScaler().fit_transform(df_test[traincols].to_numpy())
+        y_test = le.transform(df_test['int_class'])
+        # try model performance on test
+        predf = pd.DataFrame()
+        predf['truth'] = y_test
+        predf['fold'] = f
+               
+    # get tuned hyperparameters
         pparams = models[m]['params'] 
         param_dict = dict()
         for p in pparams:
@@ -171,6 +257,7 @@ for f in folds:
         predf[m + '_predict'] = clf.predict(X_test)
         # create confusion matrix
         cm = metrics.confusion_matrix(predf['truth'], predf[m + '_predict'])
+        cm_list.append(cm)
         val_cm = metrics.confusion_matrix(y_test, clf.predict(X_test))
     #    # compute row and col sums
         total = cm.sum(axis=0)
@@ -193,7 +280,8 @@ for f in folds:
         o_accuracy = np.sum(cm.diagonal()) / np.sum(cm.sum(axis=0))
         p_accuracy = cm.diagonal() / cm.sum(axis=0) # producer's accuracy
         u_accuracy = cm.diagonal() / cm.sum(axis=1) # user's accuracy
-        
+        kappa = metrics.cohen_kappa_score(predf.truth, predf[m + '_predict']) #kappa statistic
+        print('Cohens Kappa %.2f' % (kappa))
         print(m + ' Overall accuracy %.2f' % (o_accuracy))
         print(m + ' Users accuracy', u_accuracy)
         print(m + ' Producers accuracy', p_accuracy)    
@@ -201,17 +289,24 @@ for f in folds:
         fold_oa = m + '_oa'
         pacc_cols = [m  + '_' + c + '_pa' for c in classes]
         uacc_cols = [m  + '_' + c + '_ua' for c in classes]
+        kappa_col = m + '_kappa'
         
         acc_df.loc[f, fold_oa] = o_accuracy
         acc_df.loc[f, pacc_cols] = p_accuracy
         acc_df.loc[f, uacc_cols] = u_accuracy
+        acc_df.loc[f, kappa_col] = kappa
         
-
     # concat result
     pred_df = pd.concat([pred_df, predf])
+
+    cms_arr = np.array(cm_list)
+    cm_mean = np.mean(cms_arr, axis = 0)
+    row_pct, col_pct, metrics_df = plot_confusion_with_metrics(cm, m, modeldir, labels=classes)
+    
 # redefine index
 pred_df.index = np.arange(0,len(pred_df))
 cms = np.array(cms)
+
 # dropna
 acc_df = acc_df.dropna()
 # save dataframe
@@ -221,7 +316,6 @@ acc_df.to_csv(acc_df_out, sep=';')
 acc_df_desc = acc_df.describe()
 acc_df_desc_out = os.path.join(modeldir, 'acc_df_describe.csv')
 acc_df_desc.to_csv(acc_df_desc_out, sep=';')
-
 
 # read 
 acc_df = pd.read_csv(acc_df_out, sep=';')
@@ -279,30 +373,20 @@ fig.suptitle('CV model accuracies on test set', y=1.05)
 plot_ua_pa_out = os.path.join(modeldir, 'P_U_accuracies.png')
 plt.savefig(plot_ua_pa_out, dpi=300, format='PNG')
 
-
-
-    # row, col params for multiplot
-#    if i[0] < pr:
-#        r = 0
-#        c = i[0] -1
-#    elif i[0] >= pc:
-#        r = 1
-#        c = i[0] - pc -1
-
-
+# -------------------------------------------- #
 # # save confusion matrix dataframe as csv
 # cmdf_name = m + '_cm.csv'
 # cmdf_out = os.path.join(modeldir, cmdf_name)
 # cmdf.to_csv(cmdf_out, sep=';')
 
 # # plot 
-# sns.set_theme(style='white')
-# fig, ax = plt.subplots()
-# ax = sns.heatmap(np.mean(cms, axis=0), annot=True, cmap='Blues', fmt='.0f', cbar=False)
-# ax.xaxis.set_ticks_position('top')
-# ax.tick_params(axis='both', which='both', length=0)
-# fig.suptitle('Average classification accuracy')
-# plt.tight_layout()
+sns.set_theme(style='white')
+fig, ax = plt.subplots()
+ax = sns.heatmap(np.mean(cms, axis=0), annot=True, cmap='Blues', fmt='.0f', cbar=False)
+ax.xaxis.set_ticks_position('top')
+ax.tick_params(axis='both', which='both', length=0)
+fig.suptitle('Average classification accuracy')
+plt.tight_layout()
 # plt.savefig(os.path.join(os.path.dirname(fp), 'plots', 'filename.png'), dpi=150, format='PNG')
 # #----------------------------------#
 
