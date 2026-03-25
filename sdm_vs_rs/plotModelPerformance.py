@@ -88,7 +88,7 @@ def plot_confusion_with_metrics(cm, model, output_dir, labels=None, cmap="Blues"
     hm.set_xticklabels(hm.get_xmajorticklabels(), fontsize = 20)
     hm.set_yticklabels(hm.get_xmajorticklabels(), fontsize = 20)
     
-    ax[0].set_title(model + " Confusion Matrix with 10-Fold Average Row & Column Percentages", fontsize=15)
+    ax[0].set_title(model + " 10-Fold Averaged Confusion Matrix ", fontsize=20)
     #ax[0].set_xlabel("Predicted", fontsize=13)
     #ax[0].set_ylabel("Actual", fontsize=13)
 
@@ -103,7 +103,7 @@ def plot_confusion_with_metrics(cm, model, output_dir, labels=None, cmap="Blues"
     )
     table.scale(1, 2)
     table.auto_set_font_size(False)
-    table.set_fontsize(11)
+    table.set_fontsize(20)
 
     plt.tight_layout()
     
@@ -133,9 +133,10 @@ fp = args.directory
 fp_pts = args.fp_pts
 fp_npy = args.cv_result
 
-# fp
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/Finland_habitat_data_init_encoded_folds.gpkg'
-fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/model/models_cv_result.npy'
+# fp for testing
+#fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/Finland_habitat_data_init_encoded_folds.gpkg'
+#fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/model/models_cv_result.npy'
+#fp = os.path.dirname(fp_pts)
 
 modeldir = os.path.dirname(fp_npy)
 # load
@@ -231,8 +232,8 @@ cm_list = [] # list to store fold cm matrix
 acc_df = pd.DataFrame(index=list(folds.keys()))
 
 for m in models:
-    #if m != 'RF':
-    #    continue 
+    if m != 'RF':
+        continue 
     # evaluation folds
     for f in folds:
         # select pixel values by point_id
@@ -304,7 +305,7 @@ for m in models:
 
     cms_arr = np.array(cm_list)
     cm_mean = np.mean(cms_arr, axis = 0)
-    row_pct, col_pct, metrics_df = plot_confusion_with_metrics(cm, m, modeldir, labels=classes)
+    row_pct, col_pct, metrics_df = plot_confusion_with_metrics(cm_mean, m, modeldir, labels=classes)
     
 # redefine index
 pred_df.index = np.arange(0,len(pred_df))
