@@ -181,8 +181,6 @@ plot_out = os.path.join(modeldir, 'models_CV_accuracy.png')
 plt.savefig(plot_out, dpi=300, format='PNG')
 # ---------------------------------------------------- #
 
-# load
-models = np.load(fp_npy, allow_pickle=True).item()
 
 prefix = os.path.basename(fp_pts).split('_')[0]
 # read data
@@ -231,9 +229,9 @@ cms = []
 cm_list = [] # list to store fold cm matrix
 acc_df = pd.DataFrame(index=list(folds.keys()))
 
-for m in models:
-    if m != 'RF':
-        continue 
+for m in models.keys():
+#    if m != 'RF':
+#        continue 
     # evaluation folds
     for f in folds:
         # select pixel values by point_id
