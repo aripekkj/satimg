@@ -118,7 +118,7 @@ CLI = argparse.ArgumentParser()
 CLI.add_argument(
     'directory',
     type=str,
-    help='Directory path')
+    help='Drectory path')
 CLI.add_argument(
     "fp_pts",
     type=str,
@@ -134,8 +134,8 @@ fp_pts = args.fp_pts
 fp_npy = args.cv_result
 
 # fp for testing
-#fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/Finland_habitat_data_init_encoded_folds.gpkg'
-#fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/model/models_cv_result.npy'
+#fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/Black_Sea_habitat_data_init_LSxBLK_20200313_buf100_folds.gpkg'
+#fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/model/models_cv_result.npy'
 #fp = os.path.dirname(fp_pts)
 
 modeldir = os.path.dirname(fp_npy)
@@ -212,31 +212,22 @@ traincols = df.columns[1:-3].intersection(colset) #get the same columns as on li
 # fit label encoder
 le = LabelEncoder().fit(df['int_class'])
 # set same folds as in model evaluation
-#folds = dict()
-#skf = StratifiedKFold(n_splits=10, random_state=42, shuffle=True)
-# use field obs points
-#for i, (train, test) in enumerate(skf.split(gdf.point_id, gdf.int_class)):
-    # save train, test point_id's to dictionary
-#    k = 'fold_' + str(i+1)
-#    tr_pts = gdf['point_id'].iloc[train].tolist() # get point_id's by index
-#    te_pts = gdf['point_id'].iloc[test].tolist()
-#    folds[k] = (tr_pts, te_pts)
 
+# folds
 n_folds = [c for c in gdf.columns if '_train' in c] # get number of folds from train fold columns
 folds = ['fold_' + str(i) for i in np.arange(1,len(n_folds)+1,1)]
 
 # class names
 classes = np.unique(gdf.hab_class_ml)
 pred_df = pd.DataFrame()
-cms = []
-cm_list = [] # list to store fold cm matrix
+#cms = []
+#cm_list = [] # list to store fold cm matrix
 acc_df = pd.DataFrame(index=folds)
 
 for m in models.keys():
-#    if m != 'RF':
-#        continue 
     # evaluation folds
     for f in folds:
+        
         # segment ids for train ,test in fold
         f_train = f + '_train'
         f_test = f + '_test'
@@ -248,6 +239,7 @@ for m in models.keys():
         if len(test_similarity) != 0: 
             print('Found same values in train and test sets')
             break
+    
         # select by segment id
         df_train = df[df.segment_id.isin(train_ids)]
         df_test = df[df.segment_id.isin(test_ids)]
@@ -261,7 +253,7 @@ for m in models.keys():
         predf = pd.DataFrame()
         predf['truth'] = y_test
         predf['fold'] = f
-               
+        
     # get tuned hyperparameters
         pparams = models[m]['params'] 
         param_dict = dict()
@@ -272,57 +264,59 @@ for m in models.keys():
         clf = models[m]['model'].set_params(**param_dict) # set best model parameters
         clf.fit(X_train, y_train) # fit data
         predf[m + '_predict'] = clf.predict(X_test)
-        # create confusion matrix
-        cm = metrics.confusion_matrix(predf['truth'], predf[m + '_predict'])
-        cm_list.append(cm)
-        val_cm = metrics.confusion_matrix(y_test, clf.predict(X_test))
-    #    # compute row and col sums
-        total = cm.sum(axis=0)
-        rowtotal = val_cm.sum(axis=1)
-        rowtotal = np.expand_dims(rowtotal, axis=0).T #expand dims and transpose
-        rowtotal_sum = np.array(rowtotal.sum()) 
-        rowtotal = np.vstack([rowtotal, rowtotal_sum]) # stack row sum
-    #    # create cm DataFrame
-        cmdf = np.vstack([cm,total]) # vertical stack
-        cmdf = np.hstack((cmdf, rowtotal)) # horizontal stack
-        cms.append(cmdf)
-        cm_cols = gdf.hab_class_ml.unique().tolist()
-        cm_cols.append('Total')
-        cmdf = pd.DataFrame(cmdf, index=cm_cols,
-                            columns = cm_cols)
-        
-    #     # print
-        print(pd.crosstab(predf.truth, predf[m+'_predict'], margins=True))
-         # compute common accuracy metrics
-        o_accuracy = np.sum(cm.diagonal()) / np.sum(cm.sum(axis=0))
-        p_accuracy = cm.diagonal() / cm.sum(axis=0) # producer's accuracy
-        u_accuracy = cm.diagonal() / cm.sum(axis=1) # user's accuracy
-        kappa = metrics.cohen_kappa_score(predf.truth, predf[m + '_predict']) #kappa statistic
-        print('Cohens Kappa %.2f' % (kappa))
-        print(m + ' Overall accuracy %.2f' % (o_accuracy))
-        print(m + ' Users accuracy', u_accuracy)
-        print(m + ' Producers accuracy', p_accuracy)    
-        # store accuracies to df
-        fold_oa = m + '_oa'
-        pacc_cols = [m  + '_' + c + '_pa' for c in classes]
-        uacc_cols = [m  + '_' + c + '_ua' for c in classes]
-        kappa_col = m + '_kappa'
-        
-        acc_df.loc[f, fold_oa] = o_accuracy
-        acc_df.loc[f, pacc_cols] = p_accuracy
-        acc_df.loc[f, uacc_cols] = u_accuracy
-        acc_df.loc[f, kappa_col] = kappa
-        
-    # concat result
-    pred_df = pd.concat([pred_df, predf])
+                
+        # concat result
+        pred_df = pd.concat([pred_df, predf])
+    print('Model results', m)
+    # create confusion matrix
+    cm = metrics.confusion_matrix(pred_df['truth'], pred_df[m + '_predict'])
+#    cm_list.append(cm)
+#    val_cm = metrics.confusion_matrix(y_test, clf.predict(X_test))
+#    # compute row and col sums
+    total = cm.sum(axis=0)
+    rowtotal = cm.sum(axis=1)
+    rowtotal = np.expand_dims(rowtotal, axis=0).T #expand dims and transpose
+    rowtotal_sum = np.array(rowtotal.sum()) 
+    rowtotal = np.vstack([rowtotal, rowtotal_sum]) # stack row sum
+#    # create cm DataFrame
+    cmdf = np.vstack([cm,total]) # vertical stack
+    cmdf = np.hstack((cmdf, rowtotal)) # horizontal stack
+#    cms.append(cmdf)
+    cm_cols = gdf.hab_class_ml.unique().tolist()
+    cm_cols.append('Total')
+    cmdf = pd.DataFrame(cmdf, index=cm_cols,
+                        columns = cm_cols)
+    
+#     # print
+    print(cmdf)
+#    print(pd.crosstab(pred_df.truth, pred_df[m+'_predict'], margins=True))
+     # compute common accuracy metrics
+    o_accuracy = np.sum(cm.diagonal()) / np.sum(cm.sum(axis=0))
+    p_accuracy = cm.diagonal() / cm.sum(axis=0) # producer's accuracy
+    u_accuracy = cm.diagonal() / cm.sum(axis=1) # user's accuracy
+    kappa = metrics.cohen_kappa_score(predf.truth, predf[m + '_predict']) #kappa statistic
+    print('Cohens Kappa %.2f' % (kappa))
+    print(m + ' Overall accuracy %.2f' % (o_accuracy))
+    print(m + ' Users accuracy', u_accuracy)
+    print(m + ' Producers accuracy', p_accuracy)    
+    # store accuracies to df
+    fold_oa = m + '_oa'
+    pacc_cols = [m  + '_' + c + '_pa' for c in classes]
+    uacc_cols = [m  + '_' + c + '_ua' for c in classes]
+    kappa_col = m + '_kappa'
+    
+    acc_df.loc[f, fold_oa] = o_accuracy
+    acc_df.loc[f, pacc_cols] = p_accuracy
+    acc_df.loc[f, uacc_cols] = u_accuracy
+    acc_df.loc[f, kappa_col] = kappa
 
-    cms_arr = np.array(cm_list)
-    cm_mean = np.mean(cms_arr, axis = 0)
-    row_pct, col_pct, metrics_df = plot_confusion_with_metrics(cm_mean, m, modeldir, labels=classes)
+#    cms_arr = np.array(cm_list)
+
+    row_pct, col_pct, metrics_df = plot_confusion_with_metrics(cm, m, modeldir, labels=classes)
     
 # redefine index
 pred_df.index = np.arange(0,len(pred_df))
-cms = np.array(cms)
+#cms = np.array(cms)
 
 # dropna
 acc_df = acc_df.dropna()
@@ -336,97 +330,6 @@ acc_df_desc.to_csv(acc_df_desc_out, sep=';')
 
 # read 
 acc_df = pd.read_csv(acc_df_out, sep=';')
-
-# plot overall accuracies
-fig, ax = plt.subplots()
-print('Average overall accuracy %.2f' % (np.mean(acc_df[m+'_oa'])))
-ax_i = list(models.keys()).index(m)
-# plot
-ax.boxplot(acc_df[['RF_oa', 'SVM_oa', 'XGB_oa']], vert=True)
-ax.set_title('CV model overall accuracy')
-ax.set_xticklabels(['RF', 'SVM', 'XGB'])
-plt.tight_layout()
-oa_out = os.path.join(modeldir, 'OA_accuracies.png')
-plt.savefig(oa_out, dpi=300, format='PNG')
-
-# multiplot for users and producers accuracy for each class
-nclass = len(classes)
-ncol = np.arange(0,2,1)
-nrow = np.arange(0,nclass)
- 
-hablist = list(np.unique(gdf.hab_class_ml))
-fig, ax = plt.subplots(len(nrow), 2, figsize=(12,8), sharex=True, sharey=True)
-
-for hab in hablist:
-    cols_to_plot = [h for h in acc_df.columns if hab in h]
-    
-    # select producer's and user's accuracy columns
-    cols_pa = [c for c in cols_to_plot if 'pa' in c]
-    cols_ua = [c for c in cols_to_plot if 'ua' in c]
-    # Filter data using np.isnan
-    plot_pa = acc_df[cols_pa].to_numpy()
-    mask = ~np.isnan(plot_pa)
-    filtered_pa = [d[ma] for d, ma in zip(plot_pa.T, mask.T)]
-    
-    plot_ua = acc_df[cols_ua].to_numpy()
-    mask = ~np.isnan(plot_ua)
-    filtered_ua = [d[ma] for d, ma in zip(plot_ua.T, mask.T)]
-    
-    nr = hablist.index(hab)
-    ax[nr,0].set_title(hab, x=1)
-    ax[nr,0].axhline(0.5, ls='--', lw=0.5, alpha=0.4, color='black')    
-    # plot
-    ax[nr,0].boxplot(filtered_pa, vert=True) # acc_df[cols_pa]    
-    ax[nr,1].boxplot(filtered_ua, vert=True)
-    ax[nr,1].axhline(0.5, ls='--', lw=0.5, alpha=0.4, color='black')
-    
-    if nr == len(nrow)-1:           
-        ax[nr,0].set_xticks([1,2,3], labels=list(models.keys()))
-        ax[nr,0].set_xlabel('Producers accuracy')
-        ax[nr,1].set_xlabel('Users accuracy')
-
-plt.tight_layout()
-fig.suptitle('CV model accuracies on test set', y=1.05)
-plot_ua_pa_out = os.path.join(modeldir, 'P_U_accuracies.png')
-plt.savefig(plot_ua_pa_out, dpi=300, format='PNG')
-
-# -------------------------------------------- #
-# # save confusion matrix dataframe as csv
-# cmdf_name = m + '_cm.csv'
-# cmdf_out = os.path.join(modeldir, cmdf_name)
-# cmdf.to_csv(cmdf_out, sep=';')
-
-# # plot 
-sns.set_theme(style='white')
-fig, ax = plt.subplots()
-ax = sns.heatmap(np.mean(cms, axis=0), annot=True, cmap='Blues', fmt='.0f', cbar=False)
-ax.xaxis.set_ticks_position('top')
-ax.tick_params(axis='both', which='both', length=0)
-fig.suptitle('Average classification accuracy')
-plt.tight_layout()
-# plt.savefig(os.path.join(os.path.dirname(fp), 'plots', 'filename.png'), dpi=150, format='PNG')
-# #----------------------------------#
-
-
-# fig, ax = plt.subplots(1,3)
-# for m in models:
-#     # select columns to plot
-#     cols_to_plot = [col for col in df_perm.columns if m in col]
-#     # plot
-#     ax_i = list(models.keys()).index(m)
-# #    ax[ax_i] = df_perm[cols_to_plot].plot.box(vert=False, whis=10)
-#     ax[ax_i].boxplot(df_perm[cols_to_plot], vert=False)
-#     ax[ax_i].axvline(0, ls='--', color='black', alpha=0.6)
-#     ax[ax_i].set_yticklabels([])
-#     ax[0].set_yticklabels(traincols)
-#     ax[ax_i].set_title(m)
-# fig.suptitle('Permutation importance')
-# plt.tight_layout()
-# plot_out = os.path.join(modeldir, prefix + '_perm_importance.png')
-# plt.savefig(plot_out, dpi=300, format='PNG')
-
-
-
 
 
 
