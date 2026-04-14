@@ -88,7 +88,7 @@ def plot_confusion_with_metrics(cm, model, output_dir, labels=None, cmap="Blues"
     hm.set_xticklabels(hm.get_xmajorticklabels(), fontsize = 20)
     hm.set_yticklabels(hm.get_xmajorticklabels(), fontsize = 20)
     
-    ax[0].set_title(model + " 10-Fold Averaged Confusion Matrix ", fontsize=20)
+    ax[0].set_title(model + " LOOCV Averaged Confusion Matrix ", fontsize=20)
     #ax[0].set_xlabel("Predicted", fontsize=13)
     #ax[0].set_ylabel("Actual", fontsize=13)
 
@@ -129,14 +129,15 @@ CLI.add_argument(
     help='Filepath for cv_result .npy')
 args = CLI.parse_args()
 
+# fp for testing
+fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/Black_Sea_habitat_data_init_LSxBLK_20200313_buf100_folds.gpkg'
+fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/model/models_cv_result.npy'
+fp = os.path.dirname(fp_pts)
+
 fp = args.directory
 fp_pts = args.fp_pts
 fp_npy = args.cv_result
 
-# fp for testing
-#fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/Black_Sea_habitat_data_init_LSxBLK_20200313_buf100_folds.gpkg'
-#fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/model/models_cv_result.npy'
-#fp = os.path.dirname(fp_pts)
 
 modeldir = os.path.dirname(fp_npy)
 # load
@@ -219,15 +220,16 @@ folds = ['fold_' + str(i) for i in np.arange(1,len(n_folds)+1,1)]
 
 # class names
 classes = np.unique(gdf.hab_class_ml)
-pred_df = pd.DataFrame()
+
 #cms = []
 #cm_list = [] # list to store fold cm matrix
 acc_df = pd.DataFrame(index=folds)
 
 for m in models.keys():
+    pred_df = pd.DataFrame()
     # evaluation folds
     for f in folds:
-        
+
         # segment ids for train ,test in fold
         f_train = f + '_train'
         f_test = f + '_test'
