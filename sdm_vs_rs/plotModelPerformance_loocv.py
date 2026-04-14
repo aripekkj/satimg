@@ -130,9 +130,9 @@ CLI.add_argument(
 args = CLI.parse_args()
 
 # fp for testing
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/Black_Sea_habitat_data_init_LSxBLK_20200313_buf100_folds.gpkg'
-fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/model/models_cv_result.npy'
-fp = os.path.dirname(fp_pts)
+#fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/Black_Sea_habitat_data_init_LSxBLK_20200313_buf100_folds.gpkg'
+#fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/model/models_cv_result.npy'
+#fp = os.path.dirname(fp_pts)
 
 fp = args.directory
 fp_pts = args.fp_pts
@@ -272,6 +272,11 @@ for m in models.keys():
     print('Model results', m)
     # create confusion matrix
     cm = metrics.confusion_matrix(pred_df['truth'], pred_df[m + '_predict'])
+    # save cm dataframe
+    cm_cols = gdf.hab_class_ml.unique().tolist()
+    cm_df = pd.DataFrame(cm, index=cm_cols, columns = cm_cols)
+    cm_df_out = os.path.join(modeldir, m + 'cm_df.csv')
+    cm_df.to_csv(cm_df_out, sep=';')
 #    cm_list.append(cm)
 #    val_cm = metrics.confusion_matrix(y_test, clf.predict(X_test))
 #    # compute row and col sums
@@ -284,7 +289,7 @@ for m in models.keys():
     cmdf = np.vstack([cm,total]) # vertical stack
     cmdf = np.hstack((cmdf, rowtotal)) # horizontal stack
 #    cms.append(cmdf)
-    cm_cols = gdf.hab_class_ml.unique().tolist()
+
     cm_cols.append('Total')
     cmdf = pd.DataFrame(cmdf, index=cm_cols,
                         columns = cm_cols)
