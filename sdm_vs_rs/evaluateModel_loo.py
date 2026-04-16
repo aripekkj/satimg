@@ -2,7 +2,7 @@
 """
 Created on Mon Aug 12 08:39:25 2024
 
-Model cross validation
+Model LOOCV 
 
 @author: 
 """
@@ -81,9 +81,8 @@ df.to_csv(df_merged, sep=';')
 # set train cols
 colset = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8'] + pcacols + ['bathymetry']
 traincols = df.columns[1:-3].intersection(colset) #get the same columns as on list
-print(traincols)
 
-# standardize data
+# labelencoder to transfrom labels 0,1,2,... 
 le = LabelEncoder() 
 le.fit(np.unique(df.int_class)) # fit classes
 print(np.unique(df.int_class, return_counts=True)) # check n_classes, n_samples
@@ -92,9 +91,13 @@ print(np.unique(df.int_class, return_counts=True)) # check n_classes, n_samples
 # define models #
 
 models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balanced'),
-                 'params': {"n_estimators": [50, 150, 200, 500], "max_depth": [3,6], "max_features": ['sqrt', 'log2'],
-                            "min_samples_leaf":[1,2,4], "min_samples_split":[2,5,10],
-                           "bootstrap":[True,False]}},
+                 'params': {"n_estimators": [50, 150, 200, 500], 
+                            "max_depth": [3,6], 
+                            "max_features": ['sqrt', 'log2'],
+                            "min_samples_leaf":[1,2,4], 
+                            "min_samples_split":[2,5,10],
+                            "bootstrap":[True,False]
+                          }},
           'SVM': {'model': SVC(probability=True, class_weight='balanced'),
                   'params': {"kernel": ['rbf'], "C": [100, 10, 1.0, 0.1, 0.01], "gamma": [100, 10, 1.0, 0.1, 0.01]}},
           'XGB': {'model': XGBClassifier(eval_metric='mlogloss', verbosity=0, device='cpu', num_class=len(np.unique(df.int_class))),
@@ -115,15 +118,17 @@ for m in models:
 # add columns to dataframe
 for p in proba_cols:
     gdf[p] = None
-# df to store permutation importance
-df_perm = pd.DataFrame(index=np.arange(0,100))
+
 # folds
 n_folds = [c for c in gdf.columns if '_train' in c] # get number of folds from train fold columns
 folds = ['fold_' + str(i) for i in np.arange(1,len(n_folds)+1,1)]
+# df to store permutation importance
+df_perm = pd.DataFrame(index=np.arange(0,len(folds)*10))
+
 # evaluate
 for f in folds:
     print('Evaluating:', f)
-
+    
     # segment ids for train ,test in fold
     f_train = f + '_train'
     f_test = f + '_test'
@@ -135,7 +140,7 @@ for f in folds:
     if len(test_similarity) != 0: 
         print('Found same values in train and test sets')
         break
-    
+
     # select by segment id
     df_train = df[df.segment_id.isin(train_ids)]
     df_test = df[df.segment_id.isin(test_ids)]
@@ -152,13 +157,10 @@ for f in folds:
     
     # sample weights
     sample_weights = compute_sample_weight('balanced', y_train)
-    print(sample_weights)
     # StratifiedGroupKFold for hyperparameter tuning
     sgkf = StratifiedGroupKFold(n_splits=5, shuffle=False)
     # hyperparameter optimization
     for m in models:
-        #if m != 'RF': # just to select one model for testing
-        #    continue
         # make pipeline 
         pipeline = Pipeline([('scaler', StandardScaler()),
                              ('classifier', models[m]['model'])])
@@ -191,19 +193,15 @@ for f in folds:
         clf = result.best_estimator_ # get best estimator from hyperparameter search. NOTE: result from RandomizedSearchCV returns pipeline, which includes scaling and the best estimator
         
         print(m, f, clf.score(X_test, y_test))
-    
+        
+        
         # predictions for test array
         predf = pd.DataFrame()
         predf['truth'] = y_test
         predf['predict_clf'] = clf.predict(X_test)
-        # classification report
-        print(m, metrics.classification_report(y_test, predf.predict_clf))
-        cm = metrics.confusion_matrix(predf['truth'], predf['predict_clf'])
-        # save confusion matrix of each fold 
-        models[m].setdefault('test_cm', []).append(cm)
+
         # predict proba to gdf
         gdf_test = gdf[gdf.segments.isin(test_ids)]   
-        # dropna
         gdf_test = gdf_test.dropna(subset=traincols)
         # replace 'bathymetry' column with 'depth' to use actual measured depth for points
         pointcols = colset.copy()
@@ -246,7 +244,7 @@ models_dict_out = os.path.join(modeldir, 'models_cv_result.npy')
 np.save(models_dict_out, models)
 # save prediction on sampled points
 gdf[proba_cols] = gdf[proba_cols].astype(float)
-gdf_out = os.path.join(modeldir, prefix + '_preds.gpkg')
+gdf_out = os.path.join(modeldir, prefix + 'preds.gpkg')
 gdf.to_file(gdf_out, engine='pyogrio')
 # save permutation importances dataframe
 perm_df_out = os.path.join(modeldir, 'permutation_importances.csv')

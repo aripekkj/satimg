@@ -4,7 +4,7 @@ Created on Thu May 15 15:28:10 2025
 
 Plot model training results
 
-@author: E1008409
+@author: 
 """
 
 
@@ -133,11 +133,6 @@ fp = args.directory
 fp_pts = args.fp_pts
 fp_npy = args.cv_result
 
-# fp for testing
-#fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/Finland_habitat_data_init_encoded_folds.gpkg'
-#fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/Finland/model/models_cv_result.npy'
-#fp = os.path.dirname(fp_pts)
-
 modeldir = os.path.dirname(fp_npy)
 # load
 models = np.load(fp_npy, allow_pickle=True).item()
@@ -169,10 +164,7 @@ ax.set_yticks(np.arange(0,1.1,0.1))
 yrange = np.arange(0,1.1,0.1).round(1)
 ax.set_yticklabels(yrange)
 ax.set_xlabel('CV fold')
-#handles, labels = ax.get_legend_handles_labels()
 
-#legend = ax.legend(handles, labels, ncol=1, frameon=True,
-#                    loc='upper right', bbox_to_anchor=(1.1,1.0))
 plt.legend(handles=handles)
 title_str = 'Mean balanced accuracy from \n CV hyperparameter search'
 plt.suptitle(title_str)
@@ -211,16 +203,6 @@ colset = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8'] + pcacols + ['ba
 traincols = df.columns[1:-3].intersection(colset) #get the same columns as on list
 # fit label encoder
 le = LabelEncoder().fit(df['int_class'])
-# set same folds as in model evaluation
-#folds = dict()
-#skf = StratifiedKFold(n_splits=10, random_state=42, shuffle=True)
-# use field obs points
-#for i, (train, test) in enumerate(skf.split(gdf.point_id, gdf.int_class)):
-    # save train, test point_id's to dictionary
-#    k = 'fold_' + str(i+1)
-#    tr_pts = gdf['point_id'].iloc[train].tolist() # get point_id's by index
-#    te_pts = gdf['point_id'].iloc[test].tolist()
-#    folds[k] = (tr_pts, te_pts)
 
 n_folds = [c for c in gdf.columns if '_train' in c] # get number of folds from train fold columns
 folds = ['fold_' + str(i) for i in np.arange(1,len(n_folds)+1,1)]
@@ -233,8 +215,6 @@ cm_list = [] # list to store fold cm matrix
 acc_df = pd.DataFrame(index=folds)
 
 for m in models.keys():
-#    if m != 'RF':
-#        continue 
     # evaluation folds
     for f in folds:
         # segment ids for train ,test in fold
@@ -261,8 +241,8 @@ for m in models.keys():
         predf = pd.DataFrame()
         predf['truth'] = y_test
         predf['fold'] = f
-               
-    # get tuned hyperparameters
+        
+        # get best hyperparameters
         pparams = models[m]['params'] 
         param_dict = dict()
         for p in pparams:
@@ -276,13 +256,13 @@ for m in models.keys():
         cm = metrics.confusion_matrix(predf['truth'], predf[m + '_predict'])
         cm_list.append(cm)
         val_cm = metrics.confusion_matrix(y_test, clf.predict(X_test))
-    #    # compute row and col sums
+        # compute row and col sums
         total = cm.sum(axis=0)
         rowtotal = val_cm.sum(axis=1)
         rowtotal = np.expand_dims(rowtotal, axis=0).T #expand dims and transpose
         rowtotal_sum = np.array(rowtotal.sum()) 
         rowtotal = np.vstack([rowtotal, rowtotal_sum]) # stack row sum
-    #    # create cm DataFrame
+        # create cm DataFrame
         cmdf = np.vstack([cm,total]) # vertical stack
         cmdf = np.hstack((cmdf, rowtotal)) # horizontal stack
         cms.append(cmdf)
@@ -291,7 +271,7 @@ for m in models.keys():
         cmdf = pd.DataFrame(cmdf, index=cm_cols,
                             columns = cm_cols)
         
-    #     # print
+
         print(pd.crosstab(predf.truth, predf[m+'_predict'], margins=True))
          # compute common accuracy metrics
         o_accuracy = np.sum(cm.diagonal()) / np.sum(cm.sum(axis=0))
@@ -389,42 +369,6 @@ plt.tight_layout()
 fig.suptitle('CV model accuracies on test set', y=1.05)
 plot_ua_pa_out = os.path.join(modeldir, 'P_U_accuracies.png')
 plt.savefig(plot_ua_pa_out, dpi=300, format='PNG')
-
-# -------------------------------------------- #
-# # save confusion matrix dataframe as csv
-# cmdf_name = m + '_cm.csv'
-# cmdf_out = os.path.join(modeldir, cmdf_name)
-# cmdf.to_csv(cmdf_out, sep=';')
-
-# # plot 
-sns.set_theme(style='white')
-fig, ax = plt.subplots()
-ax = sns.heatmap(np.mean(cms, axis=0), annot=True, cmap='Blues', fmt='.0f', cbar=False)
-ax.xaxis.set_ticks_position('top')
-ax.tick_params(axis='both', which='both', length=0)
-fig.suptitle('Average classification accuracy')
-plt.tight_layout()
-# plt.savefig(os.path.join(os.path.dirname(fp), 'plots', 'filename.png'), dpi=150, format='PNG')
-# #----------------------------------#
-
-
-# fig, ax = plt.subplots(1,3)
-# for m in models:
-#     # select columns to plot
-#     cols_to_plot = [col for col in df_perm.columns if m in col]
-#     # plot
-#     ax_i = list(models.keys()).index(m)
-# #    ax[ax_i] = df_perm[cols_to_plot].plot.box(vert=False, whis=10)
-#     ax[ax_i].boxplot(df_perm[cols_to_plot], vert=False)
-#     ax[ax_i].axvline(0, ls='--', color='black', alpha=0.6)
-#     ax[ax_i].set_yticklabels([])
-#     ax[0].set_yticklabels(traincols)
-#     ax[ax_i].set_title(m)
-# fig.suptitle('Permutation importance')
-# plt.tight_layout()
-# plot_out = os.path.join(modeldir, prefix + '_perm_importance.png')
-# plt.savefig(plot_out, dpi=300, format='PNG')
-
 
 
 

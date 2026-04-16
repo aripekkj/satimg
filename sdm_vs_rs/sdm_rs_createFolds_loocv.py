@@ -4,7 +4,7 @@ Created on Wed Feb 18 13:48:28 2026
 
 Create buffers for spatial block and folds
 
-@author: E1008409
+@author: 
 """
 
 import sys
@@ -38,11 +38,6 @@ def setTrainFold(geodataframe, buffer, fold_name, column):
 fp_poly = sys.argv[1]
 fp_all_pts = sys.argv[2]
 fp_pts = sys.argv[3]
-
-# filepaths
-fp_poly = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/segmentation/LSxBLK_2020031312000_n5_s10_0_iter.gpkg'
-fp_all_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/Black_Sea_habitat_data_init_encoded.gpkg'
-fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/Black_Sea_habitat_data_init_LSxBLK_20200313.gpkg'
 
 # set buffer
 buffer = 100

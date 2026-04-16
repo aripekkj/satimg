@@ -129,11 +129,6 @@ CLI.add_argument(
     help='Filepath for cv_result .npy')
 args = CLI.parse_args()
 
-# fp for testing
-#fp_pts = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/Black_Sea_habitat_data_init_LSxBLK_20200313_buf100_folds.gpkg'
-#fp_npy = '/mnt/d/users/e1008409/MK/OBAMA-NEXT/sdm_vs_rs/spatial_block/BlackSea/model/models_cv_result.npy'
-#fp = os.path.dirname(fp_pts)
-
 fp = args.directory
 fp_pts = args.fp_pts
 fp_npy = args.cv_result
@@ -170,10 +165,7 @@ ax.set_yticks(np.arange(0,1.1,0.1))
 yrange = np.arange(0,1.1,0.1).round(1)
 ax.set_yticklabels(yrange)
 ax.set_xlabel('CV fold')
-#handles, labels = ax.get_legend_handles_labels()
 
-#legend = ax.legend(handles, labels, ncol=1, frameon=True,
-#                    loc='upper right', bbox_to_anchor=(1.1,1.0))
 plt.legend(handles=handles)
 title_str = 'Mean balanced accuracy from \n CV hyperparameter search'
 plt.suptitle(title_str)
@@ -186,7 +178,6 @@ plt.savefig(plot_out, dpi=300, format='PNG')
 prefix = os.path.basename(fp_pts).split('_')[0]
 # read data
 gdf = gpd.read_file(fp_pts, engine='pyogrio')
-# copy depth column with different name for prediction
 
 # get pca variance
 fp_pca = os.path.join(fp, 'pca', '*pca_var.csv')
@@ -212,7 +203,6 @@ colset = ['Band1', 'Band2', 'Band3', 'Band4', 'Band5', 'Band8'] + pcacols + ['ba
 traincols = df.columns[1:-3].intersection(colset) #get the same columns as on list
 # fit label encoder
 le = LabelEncoder().fit(df['int_class'])
-# set same folds as in model evaluation
 
 # folds
 n_folds = [c for c in gdf.columns if '_train' in c] # get number of folds from train fold columns
@@ -221,8 +211,6 @@ folds = ['fold_' + str(i) for i in np.arange(1,len(n_folds)+1,1)]
 # class names
 classes = np.unique(gdf.hab_class_ml)
 
-#cms = []
-#cm_list = [] # list to store fold cm matrix
 acc_df = pd.DataFrame(index=folds)
 
 for m in models.keys():
@@ -277,27 +265,25 @@ for m in models.keys():
     cm_df = pd.DataFrame(cm, index=cm_cols, columns = cm_cols)
     cm_df_out = os.path.join(modeldir, m + 'cm_df.csv')
     cm_df.to_csv(cm_df_out, sep=';')
-#    cm_list.append(cm)
-#    val_cm = metrics.confusion_matrix(y_test, clf.predict(X_test))
-#    # compute row and col sums
+
+    # compute row and col sums
     total = cm.sum(axis=0)
     rowtotal = cm.sum(axis=1)
     rowtotal = np.expand_dims(rowtotal, axis=0).T #expand dims and transpose
     rowtotal_sum = np.array(rowtotal.sum()) 
     rowtotal = np.vstack([rowtotal, rowtotal_sum]) # stack row sum
-#    # create cm DataFrame
+    # create cm DataFrame
     cmdf = np.vstack([cm,total]) # vertical stack
     cmdf = np.hstack((cmdf, rowtotal)) # horizontal stack
-#    cms.append(cmdf)
+
 
     cm_cols.append('Total')
     cmdf = pd.DataFrame(cmdf, index=cm_cols,
                         columns = cm_cols)
     
-#     # print
+    # print
     print(cmdf)
-#    print(pd.crosstab(pred_df.truth, pred_df[m+'_predict'], margins=True))
-     # compute common accuracy metrics
+    # compute common accuracy metrics
     o_accuracy = np.sum(cm.diagonal()) / np.sum(cm.sum(axis=0))
     p_accuracy = cm.diagonal() / cm.sum(axis=0) # producer's accuracy
     u_accuracy = cm.diagonal() / cm.sum(axis=1) # user's accuracy
@@ -317,13 +303,10 @@ for m in models.keys():
     acc_df.loc[f, uacc_cols] = u_accuracy
     acc_df.loc[f, kappa_col] = kappa
 
-#    cms_arr = np.array(cm_list)
-
     row_pct, col_pct, metrics_df = plot_confusion_with_metrics(cm, m, modeldir, labels=classes)
     
 # redefine index
 pred_df.index = np.arange(0,len(pred_df))
-#cms = np.array(cms)
 
 # dropna
 acc_df = acc_df.dropna()
@@ -334,10 +317,6 @@ acc_df.to_csv(acc_df_out, sep=';')
 acc_df_desc = acc_df.describe()
 acc_df_desc_out = os.path.join(modeldir, 'acc_df_describe.csv')
 acc_df_desc.to_csv(acc_df_desc_out, sep=';')
-
-# read 
-acc_df = pd.read_csv(acc_df_out, sep=';')
-
 
 
 
