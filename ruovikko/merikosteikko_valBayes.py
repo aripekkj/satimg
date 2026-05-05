@@ -97,6 +97,7 @@ def sampleRaster(raster_fp, geodataframe):
     with rio.open(raster_fp) as src:
         profile = src.profile
         crs = src.crs.to_epsg()
+        nodata = src.nodata
         # check crs
         if geodataframe.crs != src.crs:
             geodataframe = geodataframe.to_crs(src.crs)
@@ -113,9 +114,52 @@ def sampleRaster(raster_fp, geodataframe):
         geodataframe[colname] = [x for x in src.sample(coords)]
         # extract sampled list to column
         geodataframe[colname] = gpd.GeoDataFrame(geodataframe[colname].tolist(), index=geodataframe.index)
-    
+        
+        
+        base = os.path.splitext(os.path.basename(raster_fp))[0]
+        has_0 = []
+        has_1 = []
+        # check presence from 3x3 window
+        for coord in coords:
+                
+            # Get Row/Col
+            row, col = src.index(coord[0], coord[1])            
+            # Define a 3x3 Window (offsets are top-left)
+            window = Window(col - 1, row - 1, 3, 3)
+            # Read only that 3x3 grid
+            values = src.read(1, window=window, boundless=True, fill_value=profile['nodata'])
+        
+            if nodata is not None:
+                values = values[values != nodata]
+
+            if values.size == 0:
+                has_0.append(False)
+                has_1.append(False)
+                continue
+
+            # Fast presence check
+            found_0 = False
+            found_1 = False
+
+            if np.any(values == 0):
+                found_0 = True
+            if np.any(values == 1):
+                found_1 = True
+
+            has_0.append(found_0)
+            has_1.append(found_1)
+
+        geodataframe[f"{base}_has_0"] = has_0
+        geodataframe[f"{base}_has_1"] = has_1
+        
+    # set absence by pixel sample, not 3x3 window
+    geodataframe['pred'] = geodataframe[f"{base}_has_1"].copy()
+    geodataframe['pred'] = np.where((geodataframe['presence'] == 0) & (geodataframe[f"{base}"] == 0) 
+                           , False, geodataframe['pred'])
+    geodataframe['pred'] = np.where((geodataframe['presence'] == 0) & (geodataframe[f"{base}"] == 255) 
+                           , False, geodataframe['pred'])
     # select rows where sampled is not nodata
-    geodataframe = geodataframe[geodataframe[colname] != profile['nodata']]
+    #geodataframe = geodataframe[geodataframe[colname] != profile['nodata']]
     
     return geodataframe
 
@@ -143,7 +187,7 @@ def sampleRasterZonal_fast(
         # Handle MultiPoints
         if gdf.geometry.geom_type.str.contains("MultiPoint").any():
             gdf = gdf.explode(index_parts=False)
-    
+        
         # Buffer geometries
         buffered = gdf.geometry.buffer(buffer_distance)
     
@@ -297,8 +341,10 @@ def plot_confusion_with_metrics(cm, output_dir, rastername, labels=None, cmap="B
 
 def confusion_matrix(geodataframe, rastername, outdir):
     colname =  [c for c in geodataframe.columns if '_has_1' in c]
+    
     # create confusion matrix
-    cm = metrics.confusion_matrix(geodataframe['presence'], geodataframe[colname])
+#    cm = metrics.confusion_matrix(geodataframe['presence'], geodataframe[colname])
+    cm = metrics.confusion_matrix(geodataframe['presence'], geodataframe['pred'])
     # to dataframe
     cmdf = pd.DataFrame(cm)
     # save confusion matrix as csv
@@ -339,10 +385,10 @@ if __name__ == '__main__':
     gdf = gpd.read_file(fp_pts, engine='pyogrio')
     
     # map raster files
-    files = [f for f in glob.glob(os.path.join(rasterdir, '**/*Bayes*.tif'), recursive=True)]
+    files = [f for f in glob.glob(os.path.join(rasterdir, '**/*Bayes*interpretation.tif'), recursive=True)]
     # 
     for f in files:
-        break
+        
         year = int(os.path.basename(os.path.dirname(f)))
         outdir = os.path.dirname(f)
         rastername = os.path.basename(f).split('.')[0]
@@ -358,12 +404,12 @@ if __name__ == '__main__':
         sel = sampleRaster(converted_out, sel)
         # zonal
         #test = sel[sel['ID'] == 614764]
-        zon = sampleRasterZonal_fast(converted_out, sel, buffer_distance=10)
+        #zon = sampleRasterZonal_fast(converted_out, sel, buffer_distance=10)
         # save points
-        gdf_out = os.path.join(outdir, 'velmu_vegcov_threshold_' + str(VEG_COVER_THR) + '_bolbo_phrag_schoen_typha.gpkg')
-        zon.to_file(gdf_out, engine='pyogrio')
+        gdf_out = os.path.join(outdir, 'velmu_vegcov_threshold_' + str(VEG_COVER_THR) + '_bolbo_phrag_schoen_typha_3x3.gpkg')
+        sel.to_file(gdf_out, engine='pyogrio')
         # create confusion matrix and plot    
-        cm = confusion_matrix(zon, rastername, outdir=outdir)
+        cm = confusion_matrix(sel, rastername, outdir=outdir)
         plot_confusion_with_metrics(cm, outdir, rastername, labels=['Absence', 'Presence'])    
         
 
