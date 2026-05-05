@@ -13,7 +13,7 @@ import pandas as pd
 import geopandas as gpd
 import rasterio as rio
 from rasterio.features import geometry_mask
-from rasterio.windows import from_bounds
+from rasterio.windows import from_bounds, Window
 from sklearn import metrics
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -50,6 +50,7 @@ def sampleRaster(raster_fp, geodataframe):
     with rio.open(raster_fp) as src:
         profile = src.profile
         crs = src.crs.to_epsg()
+        nodata = src.nodata
         # check crs
         if geodataframe.crs != src.crs:
             geodataframe = geodataframe.to_crs(src.crs)
@@ -66,11 +67,56 @@ def sampleRaster(raster_fp, geodataframe):
         geodataframe[colname] = [x for x in src.sample(coords)]
         # extract sampled list to column
         geodataframe[colname] = gpd.GeoDataFrame(geodataframe[colname].tolist(), index=geodataframe.index)
+        
+        
+        base = os.path.splitext(os.path.basename(raster_fp))[0]
+        has_0 = []
+        has_1 = []
+        # check presence from 3x3 window
+        for coord in coords:
+                
+            # Get Row/Col
+            row, col = src.index(coord[0], coord[1])            
+            # Define a 3x3 Window (offsets are top-left)
+            window = Window(col - 1, row - 1, 3, 3)
+            # Read only that 3x3 grid
+            values = src.read(1, window=window, boundless=True, fill_value=profile['nodata'])
+        
+            if nodata is not None:
+                values = values[values != nodata]
+
+            if values.size == 0:
+                has_0.append(False)
+                has_1.append(False)
+                continue
+
+            # Fast presence check
+            found_0 = False
+            found_1 = False
+
+            if np.any(values == 0):
+                found_0 = True
+            if np.any(values == 1):
+                found_1 = True
+
+            has_0.append(found_0)
+            has_1.append(found_1)
+
+        geodataframe[f"{base}_has_0"] = has_0
+        geodataframe[f"{base}_has_1"] = has_1
+        
+    # set absence by pixel sample, not 3x3 window
+    #geodataframe['pred'] = geodataframe[f"{base}_has_1"].copy()
+    #geodataframe['pred'] = np.where((geodataframe['presence'] == 0) & (geodataframe[f"{base}"] == 0) 
+    #                       , False, geodataframe['pred'])
+    #geodataframe['pred'] = np.where((geodataframe['presence'] == 0) & (geodataframe[f"{base}"] == 255) 
+    #                       , False, geodataframe['pred'])
     
     # select rows where sampled is not nodata
-    geodataframe = geodataframe[geodataframe[colname] != profile['nodata']]
+    #geodataframe = geodataframe[geodataframe[colname] != profile['nodata']]
     
     return geodataframe
+
 
 def sampleRasterZonal_fast(
     raster_fp,
@@ -307,12 +353,12 @@ if __name__ == '__main__':
         # sample raster at point locations and remove nodata rows
         sel = sampleRaster(f, sel)
         # zonal
-        zon = sampleRasterZonal_fast(f, sel, buffer_distance=10)
+        #zon = sampleRasterZonal_fast(f, sel, buffer_distance=10)
         # save points
-        gdf_out = os.path.join(outdir, 'velmu_vegcov_threshold_' + str(VEG_COVER_THR) + '_bolbo_phrag_schoen_typha.gpkg')
-        zon.to_file(gdf_out, engine='pyogrio')
+        gdf_out = os.path.join(outdir, 'velmu_vegcov_threshold_' + str(VEG_COVER_THR) + 'CORINE_bolbo_phrag_schoen_typha.gpkg')
+        sel.to_file(gdf_out, engine='pyogrio')
         # create confusion matrix and plot    
-        cm = confusion_matrix(zon, rastername, outdir=outdir)
+        cm = confusion_matrix(sel, rastername, outdir=outdir)
         plot_confusion_with_metrics(cm, outdir, rastername, labels=['Absence', 'Presence'])    
         
     
