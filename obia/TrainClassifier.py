@@ -1,0 +1,321 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Feb 20 10:37:22 2025
+
+Train classifier
+
+@author: E1008409
+"""
+
+import argparse
+import os
+import glob
+import pandas as pd
+import numpy as np
+import scipy as sc
+import matplotlib.pyplot as plt
+import pickle
+import json
+from sklearnex import patch_sklearn 
+patch_sklearn()
+from sklearn import metrics
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.utils import compute_class_weight, compute_sample_weight
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
+from sklearn.model_selection import cross_val_score, StratifiedKFold, StratifiedGroupKFold
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, precision_score, recall_score
+
+
+
+CLI = argparse.ArgumentParser()
+CLI.add_argument(
+    "directory",
+    type=str,
+    help='Directory for train, test, validation folders')
+
+args = CLI.parse_args()
+fp = args.directory
+fp = '/mnt/d/users/e1008409/MK/biodiversea/A6/aland/grid_segments/annotation'
+model_dir = os.path.join(fp, 'model')
+if os.path.isdir(model_dir) == False:
+    os.mkdir(model_dir)
+
+# read data
+df = pd.read_csv(os.path.join(fp, 'segm_merge_spatial_cv.csv'), sep=';')
+   
+print(df.head())
+print(df.tail())
+# columns to select training data
+traincols = ['R', 'G', 'B']
+# drop zeros 
+df = df.loc[(df[traincols]!=0).any(axis=1)]
+df = df.dropna() # drop nans
+print(df.int_class.unique())
+label_column = 'int_class'
+# label encoder
+le = LabelEncoder().fit(df[label_column])
+y = le.transform(df[label_column])
+
+# removing sun glint pixels (i.e. brightest values) from vegetation classes
+df = df.loc[~((df['R'] >= 150) & (df['int_class'] == 2)),:]
+df = df.loc[~((df['G'] >= 150) & (df['int_class'] == 2)),:]
+df = df.loc[~((df['B'] >= 150) & (df['int_class'] == 2)),:]
+
+df = df.loc[~((df['R'] >= 150) & (df['int_class'] == 4)),:]
+df = df.loc[~((df['G'] >= 150) & (df['int_class'] == 4)),:]
+df = df.loc[~((df['B'] >= 150) & (df['int_class'] == 4)),:]
+
+# --------------------------------------- #
+# split dataset to train, validation, test
+
+# group data to make data selection within segments
+grouped = df[['poly_id', label_column]].groupby('poly_id').min().reset_index()
+print(grouped.head())
+# split train, test
+X_train, X_test, y_train, y_test = train_test_split(grouped, grouped[label_column], 
+                                                  test_size=0.1, random_state=42, 
+                                                  stratify=grouped[label_column])
+print(np.unique(X_train.int_class, return_counts=True))
+# split validation set from train
+#X_train, X_val, y_train, y_val = train_test_split(X_train, X_train[label_column], 
+#                                                  test_size=0.12, random_state=42, 
+#                                                  stratify=X_train[label_column])
+#print(np.unique(X_train.int_class, return_counts=True))
+# select fold train and test
+df_train = df[df['poly_id'].isin(X_train.index)]
+#df_val = df[df['poly_id'].isin(X_val.index)]
+df_test = df[df['poly_id'].isin(X_test.index)]
+print('proportion of train', len(df_train)/len(df)*100)
+#print('proportion of validation', len(df_val)/len(df)*100)
+print('proportion of test', len(df_test)/len(df)*100)
+ 
+# select columns
+X_train = df_train[traincols].to_numpy()
+y_train = le.transform(df_train[label_column])
+#X_val = df_val[traincols].to_numpy()
+#y_val = le.transform(df_val[label_column])
+X_test = df_test[traincols].to_numpy()
+y_test = le.transform(df_test[label_column])
+
+# select groups (ie. segments)
+train_groups = df_train['poly_id'].to_numpy()
+#eval_groups = df_val['poly_id'].to_numpy()
+print('Classes in train set', np.unique(y_train ,return_counts=True))
+#print('Classes in validation set', np.unique(y_val ,return_counts=True))
+print('Classes in test set', np.unique(y_test ,return_counts=True))
+# sample weights
+train_weights = compute_sample_weight('balanced', y_train)
+train_class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+#eval_weights = compute_sample_weight('balanced', y_val)
+#eval_class_weights = compute_class_weight('balanced', classes=np.unique(y_val), y=y_val)
+
+# ------------------------------ #
+# define models and and values for hyperparameter search
+# models
+models = {'RF': {'model': RandomForestClassifier(n_jobs=6, class_weight='balanced'),
+                 'params': {"n_estimators": [50, 150, 200, 500], "max_depth": [3,6], "max_features": ['sqrt', 'log2']}
+                 },
+          'XGB': {'model': XGBClassifier(eval_metric='mlogloss', objective='multi:softmax', num_class=len(np.unique(df[label_column])),
+                                         device='cpu'),
+                  'params': {'learning_rate':[0.0001,0.001,0.01,0.1],
+                             'n_estimators': [50, 150, 200, 500], 'max_depth': [3,6],
+                             'subsample': [0.8, 0.5], },
+                  }
+          }
+
+scaler = StandardScaler().fit(X_train)
+X_test = scaler.transform(X_test)
+
+# StratifiedGroupKFold for hyperparameter tuning
+sgkf = StratifiedGroupKFold(n_splits=5, shuffle=False)
+for m in models:
+    print(m)  
+    # make pipeline 
+    pipeline = Pipeline([('scaler', StandardScaler()),
+                         ('classifier', models[m]['model'])])
+    pparams = pipeline.get_params()
+    param_dict = dict()
+    for p in models[m]['params']:
+        for pp in pparams:
+            if p in pp:
+                param_dict[pp] = models[m]['params'].get(p)
+
+    # set estimator params
+    search = RandomizedSearchCV(pipeline, param_distributions=param_dict, scoring='balanced_accuracy', cv=sgkf, return_train_score=True, n_iter=10, n_jobs=-1, refit=True)
+    # find best params
+    if m == 'XGB':
+        result = search.fit(X_train, y_train, classifier__sample_weight=train_weights, groups=train_groups) 
+    else:
+        result = search.fit(X_train, y_train, groups=train_groups)
+
+    # summarize result
+    print('Scores: %s' % result.scoring)
+    print(m, 'Best Score: %s' % result.best_score_)
+    print(m, 'Best Hyperparameters: %s' % result.best_params_)
+    # save best params
+    models[m]['best_params'] = result.best_params_       
+    # scores 
+    test_score = result.cv_results_['mean_test_score']
+    train_score = result.cv_results_['mean_train_score']
+    
+    fig, ax = plt.subplots()
+    ax.plot(train_score, color='blue', label='train')
+    ax.plot(test_score, color='orange', label='test')
+    ax.legend()
+    ax.set_xticks(np.arange(0,10))
+    ax.set_xticklabels(np.arange(1,11))
+    ax.set_xlabel('Fold')
+    plt.suptitle(m + ' CV learning curve')
+    plt.tight_layout()
+    plot_out = os.path.join(model_dir, m + '_learningcurve.png')
+    plt.savefig(plot_out, dpi=150, format='png')
+    #plt.show()
+    
+#    if m == 'XGB':
+#        # scale data as not in pipeline
+#        
+#        X_train = scaler.transform(X_train)
+#        X_val = scaler.transform(X_val)
+#        # re-train with optimized params and early stopping (see 'Early Stopping' in: https://xgboost.readthedocs.io/en/stable/python/sklearn_estimator.html)
+#        best_params = models[m]['model'].get_params()
+#        for k in result.best_params_.keys():
+#           new_key = k.split('__')[1]
+#          best_params[new_key] = result.best_params_[k]
+#       # fit without early stop
+#       clf = XGBClassifier(**best_params)
+#        clf.fit(X_train, y_train, eval_set=[(X_train, y_train), (X_val, y_val)],
+#             #   sample_weight=train_weights,
+#             #   sample_weight_eval_set=[train_weights, eval_weights]
+#                )
+#        result_no_stop = clf.evals_result()
+##        # fit with early stop
+#        best_params['early_stopping_rounds'] = 10
+#        clf = XGBClassifier(**best_params)
+#        clf.fit(X_train, y_train, eval_set=[(X_train, y_train), (X_val, y_val)],
+#                sample_weight=train_weights,
+#                sample_weight_eval_set=[train_weights, eval_weights]
+#                )
+#
+#        #retrieve performance metrics
+#        results = clf.evals_result()
+#        epochs = len(results['validation_0']['mlogloss'])
+#        epochs1 = len(result_no_stop['validation_0']['mlogloss'])
+#        x_axis1 = range(0, epochs1)
+#        x_axis = range(0, epochs)
+#        # plot log loss
+#        fig, ax = plt.subplots(2,1)
+#        ax[0].plot(x_axis1, result_no_stop['validation_0']['mlogloss'], label='Train', color='gray')
+#        ax[0].plot(x_axis1, result_no_stop['validation_1']['mlogloss'], label='Test', color='black')
+#        ax[1].plot(x_axis, results['validation_0']['mlogloss'], label='Train early stop')
+#        ax[1].plot(x_axis, results['validation_1']['mlogloss'], label='Test early stop')
+#        #ax.legend()
+#       plt.ylabel('MLogLoss')
+#       plt.suptitle(m + ' multi logloss with optimized params and early stopping')
+#        plot_out = os.path.join(model_dir, m + '_performance.png')
+#       plt.savefig(plot_out, dpi=150, format='png')
+#       #plt.show()
+#    else:
+#        best_params = models[m]['model'].get_params()
+#        for k in result.best_params_.keys():
+#           new_key = k.split('__')[1]
+#           best_params[new_key] = result.best_params_[k]
+#        # get best estimator
+#        X_train = scaler.transform(X_train)
+#        clf = RandomForestClassifier(**best_params).fit(X_train, y_train)
+
+    best_params = models[m]['model'].get_params()
+    for k in result.best_params_.keys():
+       new_key = k.split('__')[1]
+       best_params[new_key] = result.best_params_[k]
+    # get best estimator
+    X_tr = scaler.transform(X_train)
+    clf = models[m]['model'].set_params(**best_params).fit(X_tr, y_train)
+
+    # save model best params
+    param_dict = models[m]['best_params']
+    param_dict_out = os.path.join(model_dir, m + '_best_params.json')
+    with open(param_dict_out, 'w') as f:
+        json.dump(param_dict, f, indent=4)
+        
+    # dataframe for results
+    predf = pd.DataFrame()
+    predf['truth'] = y_test
+    
+    # predict on test set
+    predf['predict'] = clf.predict(X_test)
+    # create confusion matrix
+    cm = metrics.confusion_matrix(predf['truth'], predf['predict'])
+    # compute row and col sums
+    total = cm.sum(axis=0)
+    rowtotal = cm.sum(axis=1)
+    rowtotal = np.expand_dims(rowtotal, axis=0).T #expand dims and transpose
+    rowtotal_sum = np.array(rowtotal.sum()) 
+    rowtotal = np.vstack([rowtotal, rowtotal_sum]) # stack row sum
+    # create cm DataFrame
+    cmdf = np.vstack([cm,total]) # vertical stack
+    cmdf = np.hstack((cmdf, rowtotal)) # horizontal stack
+    cm_cols = sorted(df[label_column].unique().tolist())
+    cm_cols.append('Total')
+    cmdf = pd.DataFrame(cmdf, index=cm_cols,
+                        columns = cm_cols)
+    print(cmdf)
+    # save confusion matrix dataframe as csv
+    cmdf_name = m + '_cm.csv'
+    cmdf_out = os.path.join(model_dir, cmdf_name)
+    cmdf.to_csv(cmdf_out, sep=';')
+    # print
+    print(pd.crosstab(predf.truth, predf.predict, margins=True))
+    # compute common accuracy metrics
+    o_accuracy = np.sum(cm.diagonal()) / np.sum(cm.sum(axis=0))
+    p_accuracy = cm.diagonal() / cm.sum(axis=0) # producer's accuracy
+    u_accuracy = cm.diagonal() / cm.sum(axis=1) # user's accuracy
+    print(m + ' Overall accuracy %.2f' % (o_accuracy))
+    print(m + ' Users accuracy', u_accuracy)
+    print(m + ' Producers accuracy', p_accuracy)    
+    # plot 
+    import seaborn as sns
+    sns.set_theme(style='white')
+    fig, ax = plt.subplots()
+    ax = sns.heatmap(cmdf, annot=True, cmap='Blues', fmt='.0f', cbar=False)
+    ax.xaxis.set_ticks_position('top')
+    ax.tick_params(axis='both', which='both', length=0)
+    fig.suptitle(m + ' Confusion matrix of test set classifications')
+    plt.tight_layout()
+    plt.savefig(os.path.join(model_dir, m + '_cm.png'), dpi=150, format='PNG')
+    
+    # fit all data to model and save
+    X = df[traincols].to_numpy()
+    X = StandardScaler().fit_transform(X)
+    y = le.transform(df[label_column])
+#        X = np.vstack([X_train, X_val, X_test])
+#        y = np.concatenate([y_train, y_val, y_test])
+    if m == 'XGB':
+        # define output model parameters without early stopping
+        param_dict['early_stopping_rounds'] = None    
+        clf = models[m]['model'].set_params(**param_dict)
+        clf.fit(X, y) # fit all data before saving
+    else:
+        clf = RandomForestClassifier(**best_params).fit(X, y)
+    model_out = os.path.join(model_dir, m + '.sav')
+    pickle.dump(clf, open(model_out, 'wb'))
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
