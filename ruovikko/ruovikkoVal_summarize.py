@@ -9,6 +9,7 @@ import os
 import glob
 import pandas as pd
 import numpy as np
+import json
 from pathlib import Path
 import matplotlib.pyplot as plt
 
@@ -23,8 +24,12 @@ def binary_metrics_from_cm(cm: pd.DataFrame):
     if cm.shape != (2, 2):
         return None
 
-    TN, FP = cm.iloc[0, 0], cm.iloc[0, 1]
-    FN, TP = cm.iloc[1, 0], cm.iloc[1, 1]
+#    TN, FP = cm.iloc[0, 0], cm.iloc[0, 1] # TN,FP,FN,TP as in binary classification. see https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html
+#    FN, TP = cm.iloc[1, 0], cm.iloc[1, 1]
+
+    TP, FN = cm.iloc[0, 0], cm.iloc[0, 1] 
+    FP, TN = cm.iloc[1, 0], cm.iloc[1, 1]
+
 
     precision = TP / (TP + FP) if (TP + FP) > 0 else np.nan
     recall = TP / (TP + FN) if (TP + FN) > 0 else np.nan
@@ -43,7 +48,7 @@ for m in METHODS:
     # Collect metrics per file
     precision, recall, f1, balanced_accuracy = [], [], [], []
 
-    for file in glob.glob(os.path.join(ROOT_DIR, f'**/*{m}*.csv'), recursive=True):
+    for file in glob.glob(os.path.join(ROOT_DIR, f'**/*{m}*0.csv'), recursive=True):
             print(file)
             cm = read_confusion_matrix(file)
             metrics = binary_metrics_from_cm(cm)
@@ -74,15 +79,88 @@ for m in METHODS:
     ax[idx].set_ylabel("Score")
     ax[idx].set_title(f"{m} interpretation")
     ax[idx].set_ylim(0, 1)
-plt.suptitle("Accuracy Metrics for years 2016-2024")
-fig_out = os.path.join(ROOT_DIR, f'val_acc_{m}.png')
+    ax[idx].grid(alpha=0.3)
+# title for whole plot, output filename and save
+plt.suptitle("Reedbed Presence Accuracy Metrics for years 2016-2024")
+m_str = '_'.join(METHODS)
+fig_out = os.path.join(ROOT_DIR, f'val_acc_{m_str}.png')
 plt.tight_layout()
-#plt.savefig(fig_out, dpi=300)
+plt.savefig(fig_out, dpi=300)
 plt.show()
-
     
+        
+# Different Bayes thresholds
+# Collect metrics per file
+years = ['2016','2017','2018','2019','2020','2021','2022','2023','2024']
+metrics_dict = {}
 
+for y in years:
+    precision, recall, f1, balanced_accuracy = [], [], [], []
+    print(y)
+    for file in glob.glob(os.path.join(ROOT_DIR, f'**{y}/cm_plots/*.csv'), recursive=True):
+        print(file)
+        thr = file.split('_')[-3]
+        cm = read_confusion_matrix(file)
+        metrics = binary_metrics_from_cm(cm)
+        if metrics is not None:
+            p, r, f, ba = metrics
+            precision.append((thr, p))
+            recall.append((thr, r))
+            f1.append((thr, f))
+            balanced_accuracy.append((thr, ba))
+        print(metrics)
 
+    # store metrics to dict
+    metrics_dict[y] = {'precision': precision,
+                       'recall': recall,
+                       'f1_score': f1,
+                       'balanced_accuracy': balanced_accuracy
+                       }
+
+# save as json
+bayes_metrics_out = os.path.join(ROOT_DIR, 'bayes_metrics.json')
+j = json.dumps(metrics_dict, indent=4)
+with open(bayes_metrics_out, "w") as f:
+    print(j, file=f)
+    
+# plot
+plotout = os.path.join(ROOT_DIR, 'bayes_threshold_metrics_plot.png')
+
+metrics = ['precision', 'recall', 'f1_score', 'balanced_accuracy']
+xticklabels = [-5,-4,-3,-2,-1,0,1,2,3,4]
+yticks = np.arange(0,1,0.1)
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
+axes = axes.flatten()
+
+for ax, metric in zip(axes, metrics):
+
+    for year, year_data in sorted(metrics_dict.items()):
+
+        # sort by first element of tuple
+        points = sorted(year_data[metric], key=lambda x: float(x[0]))
+
+        x = [float(p[0]) for p in points]
+        y = [float(p[1]) for p in points]
+
+        ax.plot(x, y, marker='o', label=year)
+
+    ax.set_title(metric.replace('_', ' ').title())
+    ax.set_ylabel(metric.replace('_', ' ').title())
+    ax.set_xticks(x)
+    ax.set_xticklabels(xticklabels)
+    ax.set_yticks(yticks)
+    ax.axvline(127, ls='--', color='gray', alpha=0.5)
+    ax.grid(True, alpha=0.3)
+
+axes[2].set_xlabel('Threshold')
+axes[3].set_xlabel('Threshold')
+
+axes[1].legend(title='Year', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+plt.tight_layout()
+plt.savefig(plotout, dpi=300)
+plt.show()
 
 
 

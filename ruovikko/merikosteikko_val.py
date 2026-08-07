@@ -37,7 +37,7 @@ def subsetGDF(geodataframe, depth_thr, veg_cover_thr, year):
     # compute coverage
     sel['vegcov'] = sel[cols].sum(axis=1, numeric_only=True)
     # set presence/absence
-    sel['presence'] = np.where(sel.vegcov >= veg_cover_thr, 1, 0)
+    sel['presence'] = np.where(sel.vegcov > veg_cover_thr, 1, 0)
     
     print(f'Dataframe subset size {len(sel)}')
     print('Min date', geodataframe['PVM'].min())
@@ -236,7 +236,7 @@ def plot_confusion_with_metrics(cm, output_dir, rastername, labels=None, cmap="B
     tp = np.diag(cm)
     fp = cm.sum(axis=0) - tp
     fn = cm.sum(axis=1) - tp
-
+    
     precision = tp / (tp + fp)
     recall = tp / (tp + fn)
     f1 = 2 * precision * recall / (precision + recall)
@@ -267,6 +267,8 @@ def plot_confusion_with_metrics(cm, output_dir, rastername, labels=None, cmap="B
     hm.set_xticklabels(hm.get_xmajorticklabels(), fontsize = 20)
     hm.set_yticklabels(hm.get_xmajorticklabels(), fontsize = 20)
     
+    hm.set_xlabel('Predicted', fontsize = 20)
+    hm.set_ylabel('True', fontsize = 20)
     titlename = rastername.replace('_', ' ')
     ax[0].set_title(f"{titlename} \n Validation Confusion Matrix", fontsize=20)
     #ax[0].set_xlabel("Predicted", fontsize=13)
@@ -284,11 +286,11 @@ def plot_confusion_with_metrics(cm, output_dir, rastername, labels=None, cmap="B
     table.scale(1, 2)
     table.auto_set_font_size(False)
     table.set_fontsize(20)
-
+    
     plt.tight_layout()
     
     #output filename
-    plot_out = os.path.join(output_dir, f'{rastername}_cm_metrics_plot.png')
+    plot_out = os.path.join(output_dir, f'{rastername}_cm_metrics_plot_thr{VEG_COVER_THR}.png')
     plt.savefig(plot_out, dpi=300)
     #plt.show()
 
@@ -297,7 +299,7 @@ def plot_confusion_with_metrics(cm, output_dir, rastername, labels=None, cmap="B
 def confusion_matrix(geodataframe, rastername, outdir):
     colname =  [c for c in geodataframe.columns if '_has_1' in c]
     # create confusion matrix
-    cm = metrics.confusion_matrix(geodataframe['presence'], geodataframe[colname])
+    cm = metrics.confusion_matrix(geodataframe['presence'], geodataframe[colname], labels=[1,0])
     # to dataframe
     cmdf = pd.DataFrame(cm)
     # save confusion matrix as csv
@@ -330,7 +332,7 @@ fp_pts = args.Point_fp
 
 # parameters for functions
 DEPTH_THR = -3
-VEG_COVER_THR = 1
+VEG_COVER_THR = 0
 
 
 if __name__ == '__main__':
@@ -359,7 +361,7 @@ if __name__ == '__main__':
         sel.to_file(gdf_out, engine='pyogrio')
         # create confusion matrix and plot    
         cm = confusion_matrix(sel, rastername, outdir=outdir)
-        plot_confusion_with_metrics(cm, outdir, rastername, labels=['Absence', 'Presence'])    
+        plot_confusion_with_metrics(cm, outdir, rastername, labels=['Presence', 'Absence'])    
         
     
 

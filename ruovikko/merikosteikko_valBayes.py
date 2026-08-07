@@ -37,7 +37,7 @@ def subsetGDF(geodataframe, depth_thr, veg_cover_thr, year):
     # compute coverage
     sel['vegcov'] = sel[cols].sum(axis=1, numeric_only=True)
     # set presence/absence
-    sel['presence'] = np.where(sel.vegcov >= veg_cover_thr, 1, 0)
+    sel['presence'] = np.where(sel.vegcov > veg_cover_thr, 1, 0)
     
     print(f'Dataframe subset size {len(sel)}')
     print('Min date', geodataframe['PVM'].min())
@@ -153,11 +153,12 @@ def sampleRaster(raster_fp, geodataframe):
         geodataframe[f"{base}_has_1"] = has_1
         
     # set absence by pixel sample, not 3x3 window
-    geodataframe['pred'] = geodataframe[f"{base}_has_1"].copy()
-    geodataframe['pred'] = np.where((geodataframe['presence'] == 0) & (geodataframe[f"{base}"] == 0) 
-                           , False, geodataframe['pred'])
-    geodataframe['pred'] = np.where((geodataframe['presence'] == 0) & (geodataframe[f"{base}"] == 255) 
-                           , False, geodataframe['pred'])
+    #geodataframe['pred'] = geodataframe[f"{base}_has_1"].copy()
+    #geodataframe['pred'] = np.where((geodataframe['presence'] == 0) & (geodataframe[f"{base}"] == 0) 
+    #                       , False, geodataframe['pred'])
+    #geodataframe['pred'] = np.where((geodataframe['presence'] == 0) & (geodataframe[f"{base}"] == 255) 
+    #                       , False, geodataframe['pred'])
+    
     # select rows where sampled is not nodata
     #geodataframe = geodataframe[geodataframe[colname] != profile['nodata']]
     
@@ -247,7 +248,7 @@ def sampleRasterZonal_fast(
 
     return gdf
 
-def plot_confusion_with_metrics(cm, output_dir, rastername, labels=None, cmap="Blues"):
+def plot_confusion_with_metrics(cm, output_dir, rastername, bayes_thr, labels=None, cmap="Blues"):
     """
     Plot confusion matrix with:
         - raw counts
@@ -312,6 +313,8 @@ def plot_confusion_with_metrics(cm, output_dir, rastername, labels=None, cmap="B
     hm.set_xticklabels(hm.get_xmajorticklabels(), fontsize = 20)
     hm.set_yticklabels(hm.get_xmajorticklabels(), fontsize = 20)
     
+    hm.set_xlabel('Predicted', fontsize = 20)
+    hm.set_ylabel('True', fontsize = 20)
     titlename = rastername.replace('_', ' ')
     ax[0].set_title(f"{titlename} \n Validation Confusion Matrix", fontsize=20)
     #ax[0].set_xlabel("Predicted", fontsize=13)
@@ -333,22 +336,22 @@ def plot_confusion_with_metrics(cm, output_dir, rastername, labels=None, cmap="B
     plt.tight_layout()
     
     #output filename
-    plot_out = os.path.join(output_dir, f'{rastername}_bayes_thr_{BAYES_THRESHOLD}_cm_metrics_plot.png')
+    plot_out = os.path.join(output_dir, f'{rastername}_bayes_thr_{bayes_thr:.2f}_cm_metrics_plot_vegthr{VEG_COVER_THR}.png')
     plt.savefig(plot_out, dpi=300)
     #plt.show()
 
     return row_pct, col_pct, metrics_df
 
-def confusion_matrix(geodataframe, rastername, outdir):
-    colname =  [c for c in geodataframe.columns if '_has_1' in c]
+def confusion_matrix(geodataframe, rastername, bayes_thr, outdir):
+    colname =  [c for c in geodataframe.columns if f'{bayes_thr:.2f}_has_1' in c]
     
     # create confusion matrix
-#    cm = metrics.confusion_matrix(geodataframe['presence'], geodataframe[colname])
-    cm = metrics.confusion_matrix(geodataframe['presence'], geodataframe['pred'])
+    cm = metrics.confusion_matrix(geodataframe['presence'], geodataframe[colname], labels=[1,0]) # https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html
+#    cm = metrics.confusion_matrix(geodataframe['presence'], geodataframe['pred'])
     # to dataframe
     cmdf = pd.DataFrame(cm)
     # save confusion matrix as csv
-    cmdf_name = rastername + '_cm_vegcov_threshold_' + str(VEG_COVER_THR) + '.csv'
+    cmdf_name = f'{rastername}_cm_bayes_thr_{bayes_thr:.2f}_vegcov_thr{VEG_COVER_THR}.csv'
     cmdf_out = os.path.join(outdir, cmdf_name)
     cmdf.to_csv(cmdf_out, sep=';')
     
@@ -377,8 +380,19 @@ fp_pts = args.Point_fp
 
 # parameters for functions
 DEPTH_THR = -3
-VEG_COVER_THR = 1
+VEG_COVER_THR = 0
 BAYES_THRESHOLD = 127
+bayes_thresholds = []
+
+def computeThreshold(value):
+    value_out = (value+10)/0.078740157480315
+
+    return value_out
+
+for val in np.arange(-5,5,1):
+    valout = computeThreshold(val)
+    bayes_thresholds.append(valout)
+
 
 if __name__ == '__main__':
     # read points
@@ -391,27 +405,32 @@ if __name__ == '__main__':
         
         year = int(os.path.basename(os.path.dirname(f)))
         outdir = os.path.dirname(f)
+        plotdir = os.path.join(outdir, 'cm_plots')
+        if not os.path.isdir(plotdir):
+            os.mkdir(plotdir)
+        rasterdir = os.path.join(outdir, 'threshold_rasters')
+        if not os.path.isdir(rasterdir):
+            os.mkdir(rasterdir)
+        
         rastername = os.path.basename(f).split('.')[0]
         # subset gdf
         sel = subsetGDF(gdf, DEPTH_THR, VEG_COVER_THR, year)    
         if len(sel) == 0:
             print(f'No data for year {year}')
             continue
-        # convert bayes to binary
-        converted_out = os.path.join(outdir, f'{rastername}_thr_{BAYES_THRESHOLD}.tif')
-        float_raster_to_binary_large(f, converted_out, BAYES_THRESHOLD, nodata_out=255)
-        # sample raster at point locations and remove nodata rows
-        sel = sampleRaster(converted_out, sel)
-        # zonal
-        #test = sel[sel['ID'] == 614764]
-        #zon = sampleRasterZonal_fast(converted_out, sel, buffer_distance=10)
-        # save points
-        gdf_out = os.path.join(outdir, 'velmu_vegcov_threshold_' + str(VEG_COVER_THR) + '_bolbo_phrag_schoen_typha_3x3.gpkg')
-        sel.to_file(gdf_out, engine='pyogrio')
-        # create confusion matrix and plot    
-        cm = confusion_matrix(sel, rastername, outdir=outdir)
-        plot_confusion_with_metrics(cm, outdir, rastername, labels=['Absence', 'Presence'])    
+        for b_thr in bayes_thresholds:
+            # convert bayes to binary
+            converted_out = os.path.join(rasterdir, f'{rastername}_thr_{b_thr:.2f}.tif')
+            float_raster_to_binary_large(f, converted_out, b_thr, nodata_out=255)
+            # sample raster at point locations and remove nodata rows
+            sel = sampleRaster(converted_out, sel)
+            # zonal
+            #test = sel[sel['ID'] == 614764]
+            #zon = sampleRasterZonal_fast(converted_out, sel, buffer_distance=10)
+            # save points
+            gdf_out = os.path.join(f'{outdir}_velmu_vegcov_threshold_{VEG_COVER_THR}_bolbo_phrag_schoen_typha_bayesthr{b_thr:.2f}_3x3.gpkg')
+            sel.to_file(gdf_out, engine='pyogrio')
+            # create confusion matrix and plot    
+            cm = confusion_matrix(sel, rastername, b_thr, outdir=plotdir)
+            plot_confusion_with_metrics(cm, plotdir, rastername, b_thr, labels=['Presence', 'Absence'])    
         
-
-    
-    
