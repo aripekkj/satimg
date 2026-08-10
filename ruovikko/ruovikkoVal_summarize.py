@@ -23,23 +23,26 @@ def binary_metrics_from_cm(cm: pd.DataFrame):
     cm = cm.drop('Unnamed: 0', axis=1)
     if cm.shape != (2, 2):
         return None
-
+    
 #    TN, FP = cm.iloc[0, 0], cm.iloc[0, 1] # TN,FP,FN,TP as in binary classification. see https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html
 #    FN, TP = cm.iloc[1, 0], cm.iloc[1, 1]
 
     TP, FN = cm.iloc[0, 0], cm.iloc[0, 1] 
     FP, TN = cm.iloc[1, 0], cm.iloc[1, 1]
+    
 
+    precision = TP / (TP + FP) #if (TP + FP) > 0 else np.nan
+    recall = TP / (TP + FN) #if (TP + FN) > 0 else np.nan
+    f1 = 2 * precision * recall / (precision + recall) #\
+         #if (precision + recall) > 0 else np.nan
 
-    precision = TP / (TP + FP) if (TP + FP) > 0 else np.nan
-    recall = TP / (TP + FN) if (TP + FN) > 0 else np.nan
-    f1 = 2 * precision * recall / (precision + recall) \
-         if (precision + recall) > 0 else np.nan
-
-    specificity = TN / (TN + FP) if (TN + FP) > 0 else np.nan
+    specificity = TN / (TN + FP) #if (TN + FP) > 0 else np.nan
     balanced_accuracy = (recall + specificity) / 2
 
-    return precision, recall, f1, balanced_accuracy
+    print('p', precision)
+    print('r', recall)
+
+    return precision, recall, f1, specificity, balanced_accuracy
 
 
 fig,ax = plt.subplots(1,2)
@@ -48,12 +51,12 @@ for m in METHODS:
     # Collect metrics per file
     precision, recall, f1, balanced_accuracy = [], [], [], []
 
-    for file in glob.glob(os.path.join(ROOT_DIR, f'**/*{m}*0.csv'), recursive=True):
+    for file in glob.glob(os.path.join(ROOT_DIR, f'**/*{m}*threshold_0.csv'), recursive=True):
             print(file)
             cm = read_confusion_matrix(file)
             metrics = binary_metrics_from_cm(cm)
             if metrics is not None:
-                p, r, f, ba = metrics
+                p, r, f, s, ba = metrics
                 precision.append(p)
                 recall.append(r)
                 f1.append(f)
@@ -81,7 +84,7 @@ for m in METHODS:
     ax[idx].set_ylim(0, 1)
     ax[idx].grid(alpha=0.3)
 # title for whole plot, output filename and save
-plt.suptitle("Reedbed Presence Accuracy Metrics for years 2016-2024")
+plt.suptitle("Accuracy Metrics for Reedbed Presence for years 2016-2024")
 m_str = '_'.join(METHODS)
 fig_out = os.path.join(ROOT_DIR, f'val_acc_{m_str}.png')
 plt.tight_layout()
@@ -95,7 +98,7 @@ years = ['2016','2017','2018','2019','2020','2021','2022','2023','2024']
 metrics_dict = {}
 
 for y in years:
-    precision, recall, f1, balanced_accuracy = [], [], [], []
+    precision, recall, f1, specificity, balanced_accuracy = [], [], [], [], []
     print(y)
     for file in glob.glob(os.path.join(ROOT_DIR, f'**{y}/cm_plots/*.csv'), recursive=True):
         print(file)
@@ -103,10 +106,11 @@ for y in years:
         cm = read_confusion_matrix(file)
         metrics = binary_metrics_from_cm(cm)
         if metrics is not None:
-            p, r, f, ba = metrics
+            p, r, f, s, ba = metrics
             precision.append((thr, p))
             recall.append((thr, r))
             f1.append((thr, f))
+            specificity.append((thr, s))
             balanced_accuracy.append((thr, ba))
         print(metrics)
 
@@ -114,6 +118,7 @@ for y in years:
     metrics_dict[y] = {'precision': precision,
                        'recall': recall,
                        'f1_score': f1,
+                       'specificity': specificity,
                        'balanced_accuracy': balanced_accuracy
                        }
 
@@ -161,6 +166,45 @@ axes[1].legend(title='Year', bbox_to_anchor=(1.05, 1), loc='upper left')
 plt.tight_layout()
 plt.savefig(plotout, dpi=300)
 plt.show()
+
+
+# ROC Curve
+plotout = os.path.join(ROOT_DIR, 'bayes_roc_plot.png')
+
+plt.figure(figsize=(8, 6))
+
+for year, data in sorted(metrics_dict.items()):
+
+    roc_points = sorted(
+        zip(data['specificity'], data['recall']),
+        key=lambda x: float(x[0][0])  # sort by threshold
+    )
+
+    fpr = [1 - float(spec[1]) for spec, _ in roc_points]
+    tpr = [float(rec[1]) for _, rec in roc_points]
+
+    plt.plot(fpr, tpr, marker='o', label=year)
+
+plt.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate (Recall)')
+plt.title('ROC Curve')
+plt.legend()
+plt.grid(True)
+plt.savefig(plotout, dpi=300)
+plt.show()
+
+
+
+
+
+
+
+
+
+
+
 
 
 
