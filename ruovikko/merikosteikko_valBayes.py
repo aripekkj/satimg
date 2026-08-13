@@ -40,10 +40,14 @@ def subsetGDF(geodataframe, depth_thr, veg_cover_thr, year):
     sel['presence'] = np.where(sel.vegcov > veg_cover_thr, 1, 0)
     
     print(f'Dataframe subset size {len(sel)}')
+    #print('N presence', len(sel[sel['presence'] == 1]))
+    #print('N absence', len(sel[sel['presence'] == 0]))
+    n_pre = len(sel[sel['presence'] == 1])
+    n_abs = len(sel[sel['presence'] == 0])
     print('Min date', geodataframe['PVM'].min())
     print('Max date', geodataframe['PVM'].max())
     
-    return sel
+    return sel, n_pre, n_abs
 
 def float_raster_to_binary_large(
     input_raster,
@@ -389,7 +393,7 @@ def computeThreshold(value):
 
     return value_out
 
-for val in np.arange(-5,5,1):
+for val in np.arange(5,11,1):
     valout = computeThreshold(val)
     bayes_thresholds.append(valout)
 
@@ -400,6 +404,7 @@ if __name__ == '__main__':
     
     # map raster files
     files = [f for f in glob.glob(os.path.join(rasterdir, '**/*Bayes*interpretation.tif'), recursive=True)]
+    n_obs = {}
     # 
     for f in files:
         
@@ -408,29 +413,59 @@ if __name__ == '__main__':
         plotdir = os.path.join(outdir, 'cm_plots')
         if not os.path.isdir(plotdir):
             os.mkdir(plotdir)
-        rasterdir = os.path.join(outdir, 'threshold_rasters')
-        if not os.path.isdir(rasterdir):
-            os.mkdir(rasterdir)
+        thr_rasterdir = os.path.join(outdir, 'threshold_rasters')
+        if not os.path.isdir(thr_rasterdir):
+            os.mkdir(thr_rasterdir)
         
         rastername = os.path.basename(f).split('.')[0]
         # subset gdf
-        sel = subsetGDF(gdf, DEPTH_THR, VEG_COVER_THR, year)    
+        sel, n_pre, n_abs = subsetGDF(gdf, DEPTH_THR, VEG_COVER_THR, year)    
+        # add n obs to dict
+        n_obs[year] = {'presence': n_pre,
+                    'absence': n_abs}
         if len(sel) == 0:
             print(f'No data for year {year}')
             continue
         for b_thr in bayes_thresholds:
             # convert bayes to binary
-            converted_out = os.path.join(rasterdir, f'{rastername}_thr_{b_thr:.2f}.tif')
+            converted_out = os.path.join(thr_rasterdir, f'{rastername}_thr_{b_thr:.2f}.tif')
             float_raster_to_binary_large(f, converted_out, b_thr, nodata_out=255)
             # sample raster at point locations and remove nodata rows
             sel = sampleRaster(converted_out, sel)
             # zonal
-            #test = sel[sel['ID'] == 614764]
             #zon = sampleRasterZonal_fast(converted_out, sel, buffer_distance=10)
-            # save points
-            gdf_out = os.path.join(f'{outdir}_velmu_vegcov_threshold_{VEG_COVER_THR}_bolbo_phrag_schoen_typha_bayesthr{b_thr:.2f}_3x3.gpkg')
-            sel.to_file(gdf_out, engine='pyogrio')
-            # create confusion matrix and plot    
+                        # create confusion matrix and plot    
             cm = confusion_matrix(sel, rastername, b_thr, outdir=plotdir)
             plot_confusion_with_metrics(cm, plotdir, rastername, b_thr, labels=['Presence', 'Absence'])    
+        # save points
+        gdf_out = os.path.join(f'{outdir}_velmu_vegcov_threshold_{VEG_COVER_THR}_bolbo_phrag_schoen_typha_3x3.gpkg')
+        sel.to_file(gdf_out, engine='pyogrio')
         
+    
+    # Convert to DataFrame
+    df = pd.DataFrame.from_dict(n_obs, orient='index')
+    df.index.name = 'year'
+    df = df.drop(2025, axis=0)
+    
+    # Plot
+    ax = df.plot(
+        kind='bar',
+        y=['presence', 'absence'],
+        figsize=(10, 5),
+        color=['tab:green', 'tab:red'],
+        width=0.6
+    )
+    
+    ax.set_title('Count of In-situ Observations per Year')
+    ax.set_xlabel('Year')
+    ax.set_ylabel('Count')
+    ax.legend(title='')
+    plt.xticks(rotation=0)
+    plt.tight_layout()
+    plotout = os.path.join(rasterdir, 'in-situ_counts.png')    
+    plt.savefig(plotout, dpi=300)    
+    plt.show()
+    
+        
+            
+
